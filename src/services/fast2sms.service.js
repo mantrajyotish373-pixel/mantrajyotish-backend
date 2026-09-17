@@ -51,72 +51,35 @@ const sendOtp = async (phone, otp) => {
     }
 
     const otpStr = String(otp).trim();
+    // Fast2SMS WhatsApp Business template message ID for 'whatsapp_otp'
+    const messageId = process.env.FAST2SMS_WA_MESSAGE_ID || "33365";
 
-    // Fast2SMS WhatsApp API endpoints & payloads
-    // Endpoint 1: https://www.fast2sms.com/dev/whatsapp
-    // Endpoint 2: https://www.fast2sms.com/dev/bulkV2 (route=wa or route=whatsapp)
     try {
-        console.log(`📲 Sending WhatsApp OTP (${otpStr}) to ${cleanPhone} via Fast2SMS WhatsApp template '${config.templateName}'...`);
+        console.log(`📲 Sending WhatsApp OTP (${otpStr}) to ${cleanPhone} via Fast2SMS (Message ID: ${messageId})...`);
 
-        // Attempt Fast2SMS WhatsApp POST payload
-        const waPayload = {
-            authorization: config.apiKey,
-            phone_number_id: config.phoneNumberId,
-            template_name: config.templateName,
-            recipients: [cleanPhone],
-            body_variables: [otpStr]
-        };
-
-        let response = await fetch("https://www.fast2sms.com/dev/whatsapp", {
+        // Fast2SMS WhatsApp API POST request
+        const response = await fetch("https://www.fast2sms.com/dev/whatsapp", {
             method: "POST",
             headers: {
                 "authorization": config.apiKey,
                 "Content-Type": "application/json",
                 "Accept": "application/json"
             },
-            body: JSON.stringify(waPayload)
+            body: JSON.stringify({
+                message_id: messageId,
+                numbers: cleanPhone,
+                variables_values: otpStr
+            })
         });
 
-        let data;
-        const rawText = await response.text();
-        try {
-            data = JSON.parse(rawText);
-        } catch (e) {
-            data = { raw: rawText };
+        const data = await response.json();
+
+        if (!response.ok || !data || data.return === false) {
+            const errMsg = Array.isArray(data.message) ? data.message.join(", ") : (data.message || `Fast2SMS WhatsApp API failed with status ${response.status}`);
+            throw new Error(errMsg);
         }
 
-        // If endpoint 1 returned false or non-ok, try GET / bulkV2 route parameter fallback
-        if (!response.ok || (data && data.return === false)) {
-            console.warn(`[Fast2SMS WhatsApp POST Endpoint Warning] ${data.message || rawText}. Trying GET endpoint fallback...`);
-            
-            const url = new URL("https://www.fast2sms.com/dev/bulkV2");
-            url.searchParams.append("authorization", config.apiKey);
-            url.searchParams.append("route", "wa");
-            url.searchParams.append("numbers", cleanPhone);
-            url.searchParams.append("message", config.templateName);
-            url.searchParams.append("variables_values", otpStr);
-
-            const getResponse = await fetch(url.toString(), {
-                method: "GET",
-                headers: { "Accept": "application/json" }
-            });
-
-            const getRawText = await getResponse.text();
-            let getData;
-            try {
-                getData = JSON.parse(getRawText);
-            } catch (e) {
-                getData = { raw: getRawText };
-            }
-
-            if (!getResponse.ok || (getData && getData.return === false)) {
-                const errMsg = getData.message || data.message || `Fast2SMS API failed with status ${response.status} / ${getResponse.status}`;
-                throw new Error(errMsg);
-            }
-            data = getData;
-        }
-
-        console.log(`✅ Fast2SMS WhatsApp OTP sent successfully to ${cleanPhone}.`);
+        console.log(`✅ Fast2SMS WhatsApp OTP sent successfully to ${cleanPhone}. Request ID: ${data.request_id || "N/A"}`);
         return {
             success: true,
             message: "WhatsApp OTP sent successfully",
