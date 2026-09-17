@@ -9,54 +9,82 @@ const { generateToken, generateRefreshToken, verifyRefreshToken } = require("../
  * @param {string} phone - User phone number
  */
 const sendOtp = async (phone) => {
+    if (!phone) {
+        throw new Error("Phone number is required");
+    }
+
+    const cleanPhone = fast2smsService.formatPhoneNumber(phone);
+    if (!cleanPhone || cleanPhone.length !== 10) {
+        throw new Error("Invalid phone number. Please enter a valid 10-digit mobile number.");
+    }
+
     const min = 100000;
     const max = 999999;
     const customOtp = Math.floor(Math.random() * (max - min + 1)) + min;
 
-    // Save/update OTP record in database
+    // Save/update OTP record in database (storing clean 10-digit number & string OTP)
     await Otp.findOneAndUpdate(
-        { phone },
-        { phone, otp: customOtp, expiresAt: new Date(Date.now() + 10 * 60 * 1000) }, // 10 minutes expiry
+        { phone: cleanPhone },
+        { phone: cleanPhone, otp: String(customOtp), expiresAt: new Date(Date.now() + 10 * 60 * 1000) }, // 10 minutes expiry
         { upsert: true, new: true }
     );
 
-    // Trigger Fast2SMS service
-    const result = await fast2smsService.sendOtp(phone, customOtp);
-    if (!result.success) {
-        throw new Error(result.message || "Failed to deliver OTP via Fast2SMS");
+    // Trigger Fast2SMS WhatsApp service
+    const result = await fast2smsService.sendOtp(cleanPhone, customOtp);
+    if (!result || !result.success) {
+        throw new Error(result?.message || "Failed to deliver WhatsApp OTP");
     }
 
     return {
         success: true,
-        message: "OTP sent successfully"
+        message: "WhatsApp OTP sent successfully"
     };
 };
 
 /**
  * Verify OTP and login/register user
  * @param {string} phone - User phone number
- * @param {string} otp - Entered OTP
+ * @param {string|number} otp - Entered OTP
  */
 const verifyOtp = async (phone, otp) => {
-    // Find valid OTP record
-    const otpRecord = await Otp.findOne({ phone, otp });
+    if (!phone || !otp) {
+        throw new Error("Phone number and OTP code are required");
+    }
+
+    const cleanPhone = fast2smsService.formatPhoneNumber(phone);
+    const cleanOtp = String(otp).trim();
+
+    if (!cleanPhone) {
+        throw new Error("Invalid phone number format");
+    }
+
+    // Find OTP record by clean 10 digit number or exact string phone
+    const otpRecord = await Otp.findOne({
+        $or: [{ phone: cleanPhone }, { phone: phone }],
+        otp: cleanOtp
+    });
+
     if (!otpRecord) {
-        throw new Error("Invalid OTP");
+        throw new Error("Invalid OTP. Please check the code sent to your WhatsApp and try again.");
     }
 
     // Check expiry
     if (otpRecord.expiresAt < new Date()) {
-        throw new Error("OTP has expired");
+        await Otp.deleteOne({ _id: otpRecord._id });
+        throw new Error("OTP has expired. Please request a new OTP.");
     }
 
-    // Delete OTP record after successful use
+    // Delete OTP record after successful verification
     await Otp.deleteOne({ _id: otpRecord._id });
 
     // Check if user exists, otherwise create
-    let user = await User.findOne({ phone });
+    let user = await User.findOne({
+        $or: [{ phone: cleanPhone }, { phone: phone }]
+    });
+
     if (!user) {
         user = await User.create({
-            phone,
+            phone: cleanPhone,
             role: "user",
             isProfileCompleted: false,
             walletBalance: 100
