@@ -9,18 +9,18 @@ const path = require("path");
 const nodeEnv = process.env.NODE_ENV || "development";
 let envLoaded = false;
 
-if (nodeEnv === "production") {
-    if (fs.existsSync(path.resolve(process.cwd(), ".env.production"))) {
-        require("dotenv").config({ path: ".env.production" });
-        console.log("◇ Loaded environment variables from .env.production");
-        envLoaded = true;
-    }
-} else {
-    if (fs.existsSync(path.resolve(process.cwd(), ".env.development"))) {
-        require("dotenv").config({ path: ".env.development" });
-        console.log("◇ Loaded environment variables from .env.development");
-        envLoaded = true;
-    }
+if (fs.existsSync(path.resolve(process.cwd(), ".env"))) {
+    require("dotenv").config({ path: ".env" });
+    console.log("◇ Loaded environment variables from .env");
+    envLoaded = true;
+} else if (nodeEnv === "production" && fs.existsSync(path.resolve(process.cwd(), ".env.production"))) {
+    require("dotenv").config({ path: ".env.production" });
+    console.log("◇ Loaded environment variables from .env.production");
+    envLoaded = true;
+} else if (fs.existsSync(path.resolve(process.cwd(), ".env.development"))) {
+    require("dotenv").config({ path: ".env.development" });
+    console.log("◇ Loaded environment variables from .env.development");
+    envLoaded = true;
 }
 
 if (!envLoaded) {
