@@ -13,9 +13,13 @@ const getProfile = async (req, res, next) => {
             });
         }
 
+        const isCompleted = user.isProfileCompleted === true || Boolean(user.name && user.dateofbirth);
+        const userObj = user.toObject();
+        userObj.isProfileCompleted = isCompleted;
+
         return res.status(200).json({
             success: true,
-            data: user
+            data: userObj
         });
 
     } catch (error) {
