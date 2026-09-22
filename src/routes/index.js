@@ -15,6 +15,8 @@ const adminRoutes = require("./admin.route");
 const astroInterviewRoutes = require("./astroInterview.route");
 const chatRoutes = require("./chat.route");
 const walletRoutes = require("./wallet.route");
+const placesRoutes = require("./places.route");
+const deliveryAddressRoutes = require("./deliveryAddress.route");
 
 router.get("/", (req, res) => {
     return res.status(200).json({
@@ -36,5 +38,7 @@ router.use("/admin", adminRoutes);
 router.use("/interview", astroInterviewRoutes);
 router.use("/chat", chatRoutes);
 router.use("/wallet", walletRoutes);
+router.use("/places", placesRoutes);
+router.use("/addresses", deliveryAddressRoutes);
 
 module.exports = router;

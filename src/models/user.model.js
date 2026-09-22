@@ -1,5 +1,54 @@
 const mongoose = require("mongoose");
 
+const BirthLocationSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    placeId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    city: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    district: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    state: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    country: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    latitude: {
+      type: Number,
+      default: null,
+    },
+    longitude: {
+      type: Number,
+      default: null,
+    },
+    timezone: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+  },
+  { _id: false, timestamps: true }
+);
+
 const UserSchema = new mongoose.Schema(
   {
     name: {
@@ -52,6 +101,13 @@ const UserSchema = new mongoose.Schema(
       trim: true,
     },
 
+    // 1-to-1 Birth Location sub-model
+    birthLocation: {
+      type: BirthLocationSchema,
+      default: () => ({}),
+    },
+
+    // Legacy fields kept for backward compatibility
     placeofbirth: {
       type: String,
       default: null,
@@ -128,7 +184,7 @@ const UserSchema = new mongoose.Schema(
   {
     timestamps: true,
     toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    toObject: { virtuals: true },
   }
 );
 
@@ -142,11 +198,27 @@ UserSchema.pre("save", async function () {
     this.uniqueId = `UB${randomDigits}`;
   }
 
-  const isDefaultPic = !this.profileImage || 
-                       this.profileImage.includes("user_female_pic") || 
-                       this.profileImage.includes("user_male_pic") || 
-                       this.profileImage.includes("astro_female_pic") || 
-                       this.profileImage.includes("astro_male_pic");
+  // Keep legacy placeofbirth in sync with birthLocation.name if provided
+  if (this.birthLocation && this.birthLocation.name) {
+    this.placeofbirth = this.birthLocation.name;
+    if (this.birthLocation.city) this.city = this.birthLocation.city;
+    if (this.birthLocation.state) this.state = this.birthLocation.state;
+    if (this.birthLocation.country) this.country = this.birthLocation.country;
+  } else if (this.placeofbirth && (!this.birthLocation || !this.birthLocation.name)) {
+    this.birthLocation = {
+      name: this.placeofbirth,
+      city: this.city || null,
+      state: this.state || null,
+      country: this.country || null,
+    };
+  }
+
+  const isDefaultPic =
+    !this.profileImage ||
+    this.profileImage.includes("user_female_pic") ||
+    this.profileImage.includes("user_male_pic") ||
+    this.profileImage.includes("astro_female_pic") ||
+    this.profileImage.includes("astro_male_pic");
 
   if (isDefaultPic) {
     const { getDefaultProfilePic } = require("../services/cloudinary.service");
