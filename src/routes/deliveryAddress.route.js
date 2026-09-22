@@ -7,9 +7,9 @@ const {
   updateAddress,
   deleteAddress,
 } = require("../controllers/deliveryAddress.controller");
-const { verifyToken } = require("../middlewares/auth.middleware");
+const authMiddleware = require("../middlewares/auth.middleware");
 
-router.use(verifyToken);
+router.use(authMiddleware);
 
 router.post("/", addAddress);
 router.get("/", getUserAddresses);
