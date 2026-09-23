@@ -717,6 +717,13 @@ exports.getSessionDetails = async (req, res, next) => {
             .populate("user", "firstname lastname email phone profileImage")
             .populate("astrologer", "name profileImage consultationFee rating");
 
+        if (!session) {
+            return res.status(404).json({
+                success: false,
+                message: "Chat session not found."
+            });
+        }
+
         const serverNow = new Date().toISOString();
         const startTimeISO = session.startTime ? new Date(session.startTime).toISOString() : serverNow;
 
