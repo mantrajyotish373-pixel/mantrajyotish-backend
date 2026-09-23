@@ -243,6 +243,9 @@ exports.acceptChat = async (req, res, next) => {
             console.error("Failed to transition presence status to BUSY in REST acceptChat:", err.message);
         }
 
+        const serverNow = new Date().toISOString();
+        const startTimeISO = session.startTime ? new Date(session.startTime).toISOString() : serverNow;
+
         // Start per-minute billing recurring timer
         try {
             const { getIO } = require("../config/socket");
@@ -256,7 +259,9 @@ exports.acceptChat = async (req, res, next) => {
                     session,
                     sessionId: session._id,
                     _id: session._id,
-                    id: session._id
+                    id: session._id,
+                    startTime: startTimeISO,
+                    serverNow
                 };
                 io.to(`session_${sessionId}`).emit("chat_accepted", responsePayload);
                 io.to(`user_${session.user}`).emit("chat_accepted", responsePayload);
@@ -270,7 +275,9 @@ exports.acceptChat = async (req, res, next) => {
             sessionId: session._id,
             chatId: session._id,
             _id: session._id,
-            id: session._id
+            id: session._id,
+            startTime: startTimeISO,
+            serverNow
         };
 
         return res.status(200).json({
@@ -710,12 +717,8 @@ exports.getSessionDetails = async (req, res, next) => {
             .populate("user", "firstname lastname email phone profileImage")
             .populate("astrologer", "name profileImage consultationFee rating");
 
-        if (!session) {
-            return res.status(404).json({
-                success: false,
-                message: "Chat session not found."
-            });
-        }
+        const serverNow = new Date().toISOString();
+        const startTimeISO = session.startTime ? new Date(session.startTime).toISOString() : serverNow;
 
         return res.status(200).json({
             success: true,
@@ -723,7 +726,9 @@ exports.getSessionDetails = async (req, res, next) => {
                 ...session.toObject(),
                 sessionId: session._id,
                 chatId: session._id,
-                id: session._id
+                id: session._id,
+                startTime: startTimeISO,
+                serverNow
             }
         });
 

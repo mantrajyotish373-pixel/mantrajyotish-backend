@@ -72,8 +72,12 @@ const startBillingTimer = (sessionId, io) => {
                     const remainingBalance = Math.max(0, parseFloat((userBalance - currentCost).toFixed(2)));
 
                     if (io) {
+                        const serverNow = new Date().toISOString();
+                        const startTimeISO = freshSession.startTime ? new Date(freshSession.startTime).toISOString() : serverNow;
                         const tickPayload = {
                             sessionId,
+                            startTime: startTimeISO,
+                            serverNow,
                             elapsedMinutes: Math.floor(elapsedSeconds / 60),
                             elapsedSeconds,
                             remainingBalance,
@@ -219,8 +223,12 @@ const resumeChatBilling = async (sessionId, io) => {
                 const bal = Math.max(0, parseFloat((userBalance - cost).toFixed(2)));
 
                 if (io) {
+                    const serverNow = new Date().toISOString();
+                    const startTimeISO = freshSession.startTime ? new Date(freshSession.startTime).toISOString() : serverNow;
                     const tickPayload = {
                         sessionId,
+                        startTime: startTimeISO,
+                        serverNow,
                         elapsedMinutes: Math.floor(elapsed / 60),
                         elapsedSeconds: elapsed,
                         remainingBalance: bal,

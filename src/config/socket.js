@@ -674,13 +674,18 @@ const initSocket = (server) => {
 
                 startBillingTimer(sessionId, io);
 
+                const serverNow = new Date().toISOString();
+                const startTimeISO = session.startTime ? new Date(session.startTime).toISOString() : serverNow;
+
                 const responsePayload = {
                     success: true,
                     message: "Astrologer accepted chat request. Live session started!",
                     session,
                     sessionId: session._id,
                     _id: session._id,
-                    id: session._id
+                    id: session._id,
+                    startTime: startTimeISO,
+                    serverNow
                 };
 
                 io.to(`session_${sessionId}`).emit("chat_accepted", responsePayload);
