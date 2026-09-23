@@ -456,6 +456,8 @@ exports.sendMessage = async (req, res, next) => {
 
         let newMessage;
         if (session) {
+            // Each call creates a new ChatMessage document with its own unique MongoDB _id.
+            // Identical text is intentionally allowed – no deduplication on content.
             newMessage = await ChatMessage.create({
                 session: cleanSessionId,
                 senderId: validSenderId,
@@ -464,7 +466,10 @@ exports.sendMessage = async (req, res, next) => {
                 text: text || "",
                 mediaUrl: mediaUrl || null
             });
+            console.log(`💬 [Chat REST] Message saved. _id=${newMessage._id} session=${cleanSessionId} senderType=${normalizedSenderType}`);
         } else {
+            // Session not found – create an ephemeral in-memory object so the REST response still works.
+            // This message is NOT persisted to the database.
             newMessage = {
                 session: cleanSessionId,
                 senderId: validSenderId,
@@ -475,6 +480,7 @@ exports.sendMessage = async (req, res, next) => {
                 _id: new mongoose.Types.ObjectId(),
                 createdAt: new Date()
             };
+            console.warn(`⚠️ [Chat REST] No ChatSession found for ${cleanSessionId}. Message NOT persisted.`);
         }
 
         const formattedMsg = {
@@ -492,8 +498,10 @@ exports.sendMessage = async (req, res, next) => {
             const { getIO } = require("../config/socket");
             const io = getIO();
             if (io) {
-                // Broadcast ONCE using chained .to() so Socket.io automatically deduplicates sockets
-                let emitter = io.to(`session_${cleanSessionId}`).to(`call_${cleanSessionId}`).to(cleanSessionId);
+                // Emit the canonical "receive_message" event ONCE via chained .to() rooms.
+                // Socket.io v4 automatically deduplicates sockets that are in multiple matched rooms,
+                // so each connected client receives exactly one copy of this event.
+                let emitter = io.to(`session_${cleanSessionId}`).to(cleanSessionId);
                 if (session) {
                     if (session.user) emitter = emitter.to(`user_${session.user}`);
                     if (session.astrologer) {

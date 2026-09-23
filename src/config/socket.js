@@ -493,6 +493,9 @@ const initSocket = (server) => {
         });
 
         // 3. Real-Time Instant Messaging (User <-> Astrologer)
+        // Canonical inbound event: "send_message"  →  canonical outbound event: "receive_message"
+        // Do NOT register additional aliases (send_chat_message, etc.) that call this same handler,
+        // as each additional listener would create a second ChatMessage document and a second delivery.
         const handleSendMessageSocket = async (data) => {
             try {
                 const sessionId = extractSessionId(data);
@@ -525,6 +528,8 @@ const initSocket = (server) => {
 
                 let newMessage;
                 if (session) {
+                    // Each call creates a new ChatMessage document with its own unique MongoDB _id.
+                    // Identical text is intentionally allowed – no deduplication on content.
                     newMessage = await ChatMessage.create({
                         session: sessionId,
                         senderId: validSenderId,
@@ -533,7 +538,10 @@ const initSocket = (server) => {
                         text,
                         mediaUrl
                     });
+                    console.log(`💬 [Chat] Message saved. _id=${newMessage._id} session=${sessionId} senderType=${normalizedSenderType}`);
                 } else {
+                    // Session not found – create an ephemeral in-memory object so delivery still works.
+                    // This message is NOT persisted to the database.
                     newMessage = {
                         session: sessionId,
                         senderId: validSenderId,
@@ -544,6 +552,7 @@ const initSocket = (server) => {
                         _id: new mongoose.Types.ObjectId(),
                         createdAt: new Date()
                     };
+                    console.warn(`⚠️ [Chat] No ChatSession found for ${sessionId}. Message NOT persisted.`);
                 }
 
                 const cleanSessionId = String(sessionId);
@@ -558,8 +567,10 @@ const initSocket = (server) => {
                     id: String(newMessage._id)
                 };
 
-                // Broadcast ONCE using chained .to() so Socket.io automatically deduplicates sockets
-                let emitter = io.to(`session_${cleanSessionId}`).to(`call_${cleanSessionId}`).to(cleanSessionId);
+                // Emit the canonical "receive_message" event ONCE via chained .to() rooms.
+                // Socket.io v4 automatically deduplicates sockets that are in multiple matched rooms,
+                // so each connected client receives exactly one copy of this event.
+                let emitter = io.to(`session_${cleanSessionId}`).to(cleanSessionId);
                 if (session) {
                     if (session.user) emitter = emitter.to(`user_${session.user}`);
                     if (session.astrologer) {
@@ -579,8 +590,10 @@ const initSocket = (server) => {
             }
         };
 
+        // Only ONE canonical listener for inbound chat messages.
+        // Do NOT add send_chat_message or any other alias here – doing so would cause
+        // a second ChatMessage.create() call and a second receive_message delivery.
         socket.on("send_message", handleSendMessageSocket);
-        socket.on("send_chat_message", handleSendMessageSocket);
 
         // 4. Typing Indicator Status
         socket.on("typing_status", (data) => {
