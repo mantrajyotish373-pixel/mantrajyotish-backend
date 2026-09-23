@@ -39,11 +39,20 @@ const ChatMessageSchema = new mongoose.Schema(
         isRead: {
             type: Boolean,
             default: false
+        },
+
+        clientMessageId: {
+            type: String,
+            trim: true,
+            default: null,
+            index: true
         }
     },
     {
         timestamps: true
     }
 );
+
+ChatMessageSchema.index({ session: 1, clientMessageId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("ChatMessage", ChatMessageSchema);

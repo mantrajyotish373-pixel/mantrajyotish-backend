@@ -428,7 +428,8 @@ exports.endChat = async (req, res, next) => {
 exports.sendMessage = async (req, res, next) => {
     try {
         const sessionId = getSessionIdFromBodyOrParams(req);
-        const { senderId, senderType, text, messageType, mediaUrl } = req.body;
+        const { senderId, senderType, text, messageType, mediaUrl, clientMessageId, tempId, clientMsgId } = req.body;
+        const resolvedClientMsgId = clientMessageId || tempId || clientMsgId || null;
 
         if (!sessionId || (!text && !mediaUrl)) {
             return res.status(400).json({
@@ -447,29 +448,64 @@ exports.sendMessage = async (req, res, next) => {
             }
         }
 
-        const normalizedSenderType = String(senderType || "USER").toUpperCase() === "ASTROLOGER" ? "ASTROLOGER" : "USER";
+        let normalizedSenderType = String(senderType || "USER").toUpperCase() === "ASTROLOGER" ? "ASTROLOGER" : "USER";
+        let validSenderId = (senderId && mongoose.Types.ObjectId.isValid(senderId)) ? senderId : null;
 
-        const rawSenderId = senderId || (req.user ? req.user.id || req.user._id : null);
-        const validSenderId = (rawSenderId && mongoose.Types.ObjectId.isValid(rawSenderId))
-            ? rawSenderId
-            : (session ? (normalizedSenderType === "ASTROLOGER" ? session.astrologer : session.user) : new mongoose.Types.ObjectId());
-
-        let newMessage;
         if (session) {
-            // Each call creates a new ChatMessage document with its own unique MongoDB _id.
-            // Identical text is intentionally allowed – no deduplication on content.
-            newMessage = await ChatMessage.create({
-                session: cleanSessionId,
-                senderId: validSenderId,
-                senderType: normalizedSenderType,
-                messageType: messageType || "text",
-                text: text || "",
-                mediaUrl: mediaUrl || null
-            });
-            console.log(`💬 [Chat REST] Message saved. _id=${newMessage._id} session=${cleanSessionId} senderType=${normalizedSenderType}`);
+            if (session.status === "COMPLETED" || session.status === "REJECTED" || session.status === "CANCELLED") {
+                return res.status(400).json({
+                    success: false,
+                    message: "Chat session is no longer active."
+                });
+            }
+
+            const authUserId = req.user ? String(req.user.id || req.user._id || "") : "";
+            const sessionUser = String(session.user || "");
+            const sessionAstro = String(session.astrologer || "");
+
+            const isAstroClaim = String(senderType || "").toUpperCase() === "ASTROLOGER" || (senderId && String(senderId) === sessionAstro) || (authUserId && authUserId === sessionAstro);
+
+            if (isAstroClaim) {
+                normalizedSenderType = "ASTROLOGER";
+                validSenderId = session.astrologer;
+            } else {
+                normalizedSenderType = "USER";
+                validSenderId = session.user;
+            }
+        } else {
+            validSenderId = validSenderId || new mongoose.Types.ObjectId();
+        }
+
+        let newMessage = null;
+        if (session) {
+            if (resolvedClientMsgId) {
+                newMessage = await ChatMessage.findOne({ session: cleanSessionId, clientMessageId: resolvedClientMsgId }).catch(() => null);
+            }
+
+            if (!newMessage) {
+                try {
+                    newMessage = await ChatMessage.create({
+                        session: cleanSessionId,
+                        senderId: validSenderId,
+                        senderType: normalizedSenderType,
+                        messageType: messageType || "text",
+                        text: text || "",
+                        mediaUrl: mediaUrl || null,
+                        clientMessageId: resolvedClientMsgId || null
+                    });
+                    console.log(`💬 [Chat REST] Message saved. _id=${newMessage._id} clientMessageId=${resolvedClientMsgId} session=${cleanSessionId} senderType=${normalizedSenderType}`);
+                } catch (createErr) {
+                    if (createErr.code === 11000 && resolvedClientMsgId) {
+                        newMessage = await ChatMessage.findOne({ session: cleanSessionId, clientMessageId: resolvedClientMsgId }).catch(() => null);
+                    } else {
+                        throw createErr;
+                    }
+                }
+            } else {
+                console.log(`♻️ [Chat REST] Idempotent match found. _id=${newMessage._id} clientMessageId=${resolvedClientMsgId}`);
+            }
         } else {
             // Session not found – create an ephemeral in-memory object so the REST response still works.
-            // This message is NOT persisted to the database.
             newMessage = {
                 session: cleanSessionId,
                 senderId: validSenderId,
@@ -477,6 +513,7 @@ exports.sendMessage = async (req, res, next) => {
                 messageType: messageType || "text",
                 text: text || "",
                 mediaUrl: mediaUrl || null,
+                clientMessageId: resolvedClientMsgId || null,
                 _id: new mongoose.Types.ObjectId(),
                 createdAt: new Date()
             };
@@ -489,18 +526,21 @@ exports.sendMessage = async (req, res, next) => {
             sessionId: cleanSessionId,
             chatId: cleanSessionId,
             roomId: cleanSessionId,
+            senderId: String(newMessage.senderId),
             senderType: normalizedSenderType,
+            messageType: newMessage.messageType || messageType || "text",
+            text: newMessage.text || text || "",
+            mediaUrl: newMessage.mediaUrl || mediaUrl || null,
+            clientMessageId: newMessage.clientMessageId || resolvedClientMsgId || null,
             _id: String(newMessage._id),
-            id: String(newMessage._id)
+            id: String(newMessage._id),
+            createdAt: newMessage.createdAt || new Date().toISOString()
         };
 
         try {
             const { getIO } = require("../config/socket");
             const io = getIO();
             if (io) {
-                // Emit the canonical "receive_message" event ONCE via chained .to() rooms.
-                // Socket.io v4 automatically deduplicates sockets that are in multiple matched rooms,
-                // so each connected client receives exactly one copy of this event.
                 let emitter = io.to(`session_${cleanSessionId}`).to(cleanSessionId);
                 if (session) {
                     if (session.user) emitter = emitter.to(`user_${session.user}`);
