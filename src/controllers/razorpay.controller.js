@@ -110,6 +110,116 @@ const createOrder = async (req, res) => {
     }
 };
 
+// Helper function for atomic payment verification and wallet crediting
+const processSuccessfulPayment = async ({
+    orderId,
+    transactionId,
+    paymentEntity = null,
+    clientAmount = null,
+    resolvedUser = null,
+    currency = 'INR',
+    source = 'VERIFY', // 'VERIFY' | 'WEBHOOK'
+}) => {
+    // 1. Authoritative Amount Calculation: prefer Razorpay paymentEntity (in paise -> rupees)
+    let creditedAmount = null;
+    if (paymentEntity && paymentEntity.amount) {
+        creditedAmount = Number(paymentEntity.amount) / 100;
+    } else if (clientAmount) {
+        creditedAmount = Number(clientAmount);
+    }
+
+    // 2. Find existing payment record by orderId or transactionId
+    let payment = null;
+    if (orderId) payment = await Payment.findOne({ orderId });
+    if (!payment && transactionId) payment = await Payment.findOne({ transactionId });
+
+    // 3. Handle missing payment record (e.g. order created outside or missing DB record)
+    if (!payment) {
+        if (!resolvedUser) {
+            console.warn(`[${source}_CLAIM_FAIL] No payment record and could not resolve user. Order: ${orderId}`);
+            return { claimed: false, reason: 'USER_NOT_RESOLVED', payment: null };
+        }
+        try {
+            const finalAmt = creditedAmount != null ? creditedAmount : (clientAmount ? Number(clientAmount) : 0);
+            payment = await Payment.create({
+                user: resolvedUser._id,
+                amount: finalAmt,
+                currency: currency || (paymentEntity ? paymentEntity.currency : 'INR'),
+                paymentGateway: 'Razorpay',
+                paymentStatus: 'pending', // created as pending first so we can claim atomically
+                orderId: orderId || null,
+                transactionId: transactionId || null,
+            });
+            console.log(`[${source}_RECORD_CREATED] Created pending payment record: ${payment._id}`);
+        } catch (e) {
+            // Handle race condition where another concurrent worker created the record first
+            console.warn(`[${source}_CREATE_RACE] Payment create collision: ${e.message}`);
+            if (orderId) payment = await Payment.findOne({ orderId });
+            if (!payment && transactionId) payment = await Payment.findOne({ transactionId });
+            if (!payment) {
+                return { claimed: false, reason: 'CREATE_FAILED', payment: null, error: e.message };
+            }
+        }
+    }
+
+    // Check if already processed
+    if (payment.paymentStatus === 'success') {
+        console.log(`[${source}_ALREADY_PROCESSED] Payment ${payment._id} (${orderId || transactionId}) already marked success.`);
+        return { claimed: false, reason: 'ALREADY_SUCCESS', payment, creditedAmount: payment.amount };
+    }
+
+    // 4. ATOMIC CLAIM: Attempt to transition status from pending/failed -> success atomically
+    const claimedPayment = await Payment.findOneAndUpdate(
+        {
+            _id: payment._id,
+            paymentStatus: { $ne: 'success' },
+        },
+        {
+            $set: {
+                paymentStatus: 'success',
+                transactionId: transactionId || payment.transactionId,
+                paidAt: payment.paidAt || new Date(),
+                amount: creditedAmount != null ? creditedAmount : payment.amount,
+                ...(resolvedUser && !payment.user ? { user: resolvedUser._id } : {}),
+            },
+        },
+        { new: true }
+    );
+
+    if (!claimedPayment) {
+        console.log(`[${source}_CLAIM_LOST] Concurrent worker claimed payment ${payment._id} simultaneously.`);
+        const latest = await Payment.findById(payment._id);
+        return { claimed: false, reason: 'CLAIM_LOST', payment: latest, creditedAmount: latest?.amount };
+    }
+
+    console.log(`[${source}_CLAIMED_SUCCESS] Successfully claimed payment ${claimedPayment._id} for processing.`);
+
+    // 5. ATOMIC WALLET CREDIT ($inc)
+    const finalCreditedAmt = creditedAmount != null ? creditedAmount : Number(claimedPayment.amount);
+    if (claimedPayment.appointment) {
+        try {
+            await Appointment.findByIdAndUpdate(claimedPayment.appointment, {
+                appointmentStatus: 'confirmed',
+                paymentStatus: 'paid',
+            });
+            console.log(`[${source}_APPOINTMENT_CONFIRMED] Appointment ${claimedPayment.appointment} confirmed.`);
+        } catch (e) {
+            console.warn(`[${source}_APPOINTMENT_ERR] Failed to confirm appointment:`, e.message);
+        }
+    } else if (claimedPayment.user) {
+        try {
+            await User.findByIdAndUpdate(claimedPayment.user, {
+                $inc: { walletBalance: finalCreditedAmt },
+            });
+            console.log(`[${source}_WALLET_CREDITED] Atomic $inc credited ₹${finalCreditedAmt} to user ${claimedPayment.user}`);
+        } catch (e) {
+            console.error(`[${source}_WALLET_ERR] Failed to credit wallet:`, e.message);
+        }
+    }
+
+    return { claimed: true, payment: claimedPayment, creditedAmount: finalCreditedAmt };
+};
+
 // POST /api/razorpay/verify
 const verifyPayment = async (req, res) => {
     try {
@@ -133,95 +243,30 @@ const verifyPayment = async (req, res) => {
             console.warn("Could not fetch payment entity from Razorpay:", e.message);
         }
 
-        // Determine credited amount in rupees. Prefer server-side paymentEntity amount.
-        let creditedAmount = null;
-        if (paymentEntity && paymentEntity.amount) {
-            creditedAmount = Number(paymentEntity.amount) / 100; // paise -> rupees
-        } else if (amount) {
-            creditedAmount = Number(amount);
-        }
-
-        // Update Payment record if exists
-        let payment = await Payment.findOne({ orderId: razorpay_order_id });
-        if (!payment) {
-            payment = await Payment.findOne({ transactionId: razorpay_payment_id });
-        }
-
-        // Robustly resolve user
         const resolvedUser = await resolveUserFromRequest(req);
 
-        // Track if already successful to prevent double-crediting
-        const alreadySuccess = payment && payment.paymentStatus === "success";
+        const result = await processSuccessfulPayment({
+            orderId: razorpay_order_id,
+            transactionId: razorpay_payment_id,
+            paymentEntity,
+            clientAmount: amount,
+            resolvedUser,
+            currency: req.body.currency,
+            source: 'VERIFY',
+        });
 
-        if (!payment) {
-            if (!resolvedUser) {
-                return res.status(400).json({ success: false, message: "Could not resolve user to associate with payment" });
-            }
-
-            // If no payment record exists, create one (capture case where client didn't create a payment record)
-            const newPaymentData = {
-                user: resolvedUser._id,
-                amount: creditedAmount != null ? creditedAmount : (amount ? Number(amount) : 0),
-                currency: req.body.currency || (paymentEntity ? paymentEntity.currency : "INR"),
-                paymentGateway: "Razorpay",
-                paymentStatus: "success",
-                orderId: razorpay_order_id,
-                transactionId: razorpay_payment_id,
-                paidAt: new Date()
-            };
-
-            try {
-                payment = await Payment.create(newPaymentData);
-            } catch (e) {
-                console.warn("Could not create payment record on verify:", e.message);
-                return res.status(500).json({ success: false, message: "Could not save payment record: " + e.message });
-            }
-        } else {
-            // Update fields
-            payment.paymentStatus = "success";
-            payment.transactionId = razorpay_payment_id;
-            payment.paidAt = payment.paidAt || new Date();
-            if (!payment.user && resolvedUser) {
-                payment.user = resolvedUser._id;
-            }
-            if (creditedAmount != null) {
-                payment.amount = creditedAmount;
-            }
-            await payment.save();
-        }
-
-        // Now perform follow-up actions (only if NOT already marked as success to prevent double crediting/actions)
-        if (payment && !alreadySuccess) {
-            if (payment.appointment) {
-                try {
-                    await Appointment.findByIdAndUpdate(payment.appointment, { appointmentStatus: "confirmed", paymentStatus: "paid" });
-                } catch (e) {
-                    console.warn("Could not update appointment status:", e.message);
-                }
-            } else if (payment.user) {
-                // Wallet top-up flow: credit user's wallet if payment.user present and NOT appointment payment
-                try {
-                    const user = await User.findById(payment.user);
-                    if (user) {
-                        const toAdd = creditedAmount != null ? creditedAmount : Number(payment.amount);
-                        console.log(`Crediting user ${user._id} wallet with amount:`, toAdd);
-                        user.walletBalance = (user.walletBalance || 0) + toAdd;
-                        await user.save();
-                    }
-                } catch (e) {
-                    console.warn("Could not credit user wallet:", e.message);
-                }
-            }
+        if (!result.payment && result.reason === 'USER_NOT_RESOLVED') {
+            return res.status(400).json({ success: false, message: "Could not resolve user to associate with payment" });
         }
 
         return res.status(200).json({
             success: true,
-            message: "Payment verified successfully",
+            message: result.claimed ? "Payment verified successfully" : "Payment already processed",
             data: {
                 razorpay_order_id,
                 razorpay_payment_id,
-                paymentId: payment?._id || null,
-                addedAmount: creditedAmount != null ? creditedAmount : (payment ? Number(payment.amount) : null),
+                paymentId: result.payment?._id || null,
+                addedAmount: result.creditedAmount != null ? result.creditedAmount : (result.payment ? Number(result.payment.amount) : null),
                 redirect: "/wallet"
             }
         });
@@ -261,38 +306,23 @@ const webhookHandler = async (req, res) => {
             if (paymentEntity) {
                 const orderId = paymentEntity.order_id || null;
                 const paymentId = paymentEntity.id || null;
-                try {
-                    let payment = null;
-                    if (orderId) payment = await Payment.findOne({ orderId });
-                    if (!payment && paymentId) payment = await Payment.findOne({ transactionId: paymentId });
 
-                    if (payment) {
-                        // Prevent double-crediting if already success
-                        if (payment.paymentStatus === "success") {
-                            console.log(`Webhook: Payment ${payment._id} already marked success. Skipping wallet credit.`);
-                            return res.status(200).json({ success: true, message: "Already processed" });
-                        }
-
-                        payment.paymentStatus = "success";
-                        payment.transactionId = paymentId;
-                        payment.paidAt = payment.paidAt || new Date();
-                        await payment.save();
-
-                        if (payment.appointment) {
-                            await Appointment.findByIdAndUpdate(payment.appointment, { appointmentStatus: "confirmed", paymentStatus: "paid" });
-                        } else if (payment.user) {
-                            const user = await User.findById(payment.user);
-                            if (user) {
-                                const toAdd = (paymentEntity && paymentEntity.amount) ? (Number(paymentEntity.amount) / 100) : Number(payment.amount);
-                                console.log(`Webhook: crediting user ${user._id} wallet with amount:`, toAdd);
-                                user.walletBalance = (user.walletBalance || 0) + toAdd;
-                                await user.save();
-                            }
-                        }
-                    }
-                } catch (e) {
-                    console.error("Error processing webhook payment.captured:", e);
+                let resolvedUser = null;
+                if (paymentEntity.notes && paymentEntity.notes.userId) {
+                    try {
+                        resolvedUser = await User.findById(paymentEntity.notes.userId);
+                    } catch (e) {}
                 }
+
+                await processSuccessfulPayment({
+                    orderId,
+                    transactionId: paymentId,
+                    paymentEntity,
+                    clientAmount: null,
+                    resolvedUser,
+                    currency: paymentEntity.currency || 'INR',
+                    source: 'WEBHOOK',
+                });
             }
         }
 
@@ -307,14 +337,14 @@ const webhookHandler = async (req, res) => {
                     if (orderId) payment = await Payment.findOne({ orderId });
                     if (!payment && paymentId) payment = await Payment.findOne({ transactionId: paymentId });
                     if (payment) {
-                        // Skip if already success
                         if (payment.paymentStatus === "success") {
-                            console.log(`Webhook: Payment ${payment._id} already marked success. Ignoring fail webhook.`);
+                            console.log(`[WEBHOOK_FAIL_IGNORED] Payment ${payment._id} already marked success.`);
                             return res.status(200).json({ success: true });
                         }
                         payment.paymentStatus = "failed";
                         payment.transactionId = paymentId;
                         await payment.save();
+                        console.log(`[WEBHOOK_PAYMENT_FAILED] Payment ${payment._id} marked as failed.`);
                     }
                 } catch (e) {
                     console.error("Error processing webhook payment.failed:", e);

@@ -33,12 +33,16 @@ const PaymentSchema = new mongoose.Schema(
 
     transactionId: {
         type: String,
-        default: null
+        default: null,
+        unique: true,
+        sparse: true
     },
 
     orderId: {
         type: String,
-        default: null
+        default: null,
+        unique: true,
+        sparse: true
     },
 
     paymentStatus: {
