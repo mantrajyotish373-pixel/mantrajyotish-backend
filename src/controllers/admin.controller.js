@@ -52,6 +52,27 @@ const logoutAdmin = async (req, res) => {
     return res.status(200).json({ success: true, message: "Logged out" });
 };
 
+// BOOKINGS: scheduled appointments plus live chat/call sessions, newest first
+const getBookings = async (req, res, next) => {
+    try {
+        const pop = [{ path: "user", select: "name email profileImage" }, { path: "astrologer", select: "name profileImage" }];
+        const [appointments, chats, calls] = await Promise.all([
+            Appointment.find().sort({ createdAt: -1 }).limit(300).populate(pop).lean(),
+            ChatSession.find({ status: { $ne: "PENDING" } }).sort({ createdAt: -1 }).limit(300).populate(pop).lean(),
+            VideoSession.find({ status: { $ne: "PENDING" } }).sort({ createdAt: -1 }).limit(300).populate(pop).lean()
+        ]);
+        const norm = (s) => ({ COMPLETED: "completed", ACTIVE: "pending", ACCEPTED: "pending" }[String(s).toUpperCase()] || (String(s).toLowerCase() === "completed" ? "completed" : String(s).toLowerCase() === "pending" ? "pending" : "cancelled"));
+        const rows = [
+            ...appointments.map((a) => ({ _id: a._id, user: a.user, astrologer: a.astrologer, consultationMode: a.consultationMode, createdAt: a.appointmentDate || a.createdAt, status: a.status, amount: a.amount })),
+            ...chats.map((c) => ({ _id: c._id, user: c.user, astrologer: c.astrologer, consultationMode: "chat", createdAt: c.startTime || c.createdAt, status: norm(c.status), amount: c.totalAmountDeducted })),
+            ...calls.map((c) => ({ _id: c._id, user: c.user, astrologer: c.astrologer, consultationMode: c.callType || "call", createdAt: c.startTime || c.createdAt, status: norm(c.status), amount: c.totalAmountDeducted }))
+        ].sort((x, y) => new Date(y.createdAt) - new Date(x.createdAt)).slice(0, 500);
+        return res.status(200).json({ success: true, data: rows });
+    } catch (error) {
+        next(error);
+    }
+};
+
 // 3. GET LOGGED-IN ADMIN PROFILE
 const getProfile = async (req, res, next) => {
     try {
@@ -464,6 +485,7 @@ module.exports = {
     refreshSession,
     logoutAdmin,
     getProfile,
+    getBookings,
     getAstrologers,
     getAstrologerById,
     updateAstrologer,

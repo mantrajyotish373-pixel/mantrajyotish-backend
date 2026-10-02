@@ -37,7 +37,9 @@ const PayoutSchema = new mongoose.Schema(
             type: String,
             enum: ["Pending", "Completed", "Rejected"],
             default: "Pending"
-        }
+        },
+        processedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
+        processedAt: { type: Date, default: null }
     },
     {
         timestamps: true

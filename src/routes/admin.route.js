@@ -25,6 +25,9 @@ router.get("/profile", authMiddleware, adminMiddleware, adminController.getProfi
 // Dashboard (revenue figures are stripped unless the admin has dashboard.financials)
 router.get("/dashboard-stats", authMiddleware, requirePermission("dashboard.view"), adminController.getDashboardStats);
 
+// Consultation history (appointments + chat + call sessions)
+router.get("/bookings", authMiddleware, requirePermission("bookings.view"), wrap(adminController.getBookings));
+
 // Admin Astrologer CRUD
 router.get("/astrologers", authMiddleware, requirePermission("astrologers.view"), adminController.getAstrologers);
 router.get("/astrologers/:id", authMiddleware, requirePermission("astrologers.view"), adminController.getAstrologerById);

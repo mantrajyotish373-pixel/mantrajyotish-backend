@@ -39,6 +39,7 @@ router.use("/interview", astroInterviewRoutes);
 router.use("/chat", chatRoutes);
 router.use("/session", require("./session.route"));
 router.use("/wallet", walletRoutes);
+router.use("/withdraw", require("./withdraw.route"));
 router.use("/places", placesRoutes);
 router.use("/addresses", deliveryAddressRoutes);
 
