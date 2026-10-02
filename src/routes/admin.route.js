@@ -10,6 +10,11 @@ const { requirePermission, requireSuperadmin } = adminMiddleware;
 const settingsController = require("../controllers/settings.controller");
 const promotionController = require("../controllers/promotion.controller");
 const promoPayoutController = require("../controllers/promoPayout.controller");
+const couponController = require("../controllers/coupon.controller");
+const supportAdmin = require("../controllers/supportAdmin.controller");
+const paymentLogsController = require("../controllers/paymentLogs.controller");
+const addMoneyController = require("../controllers/addMoneyConfig.controller");
+const catalogController = require("../controllers/catalog.controller");
 const { rateLimit } = require("../utils/rateLimit");
 
 const loginLimiter = rateLimit({ keyPrefix: "admin-login", windowMs: 15 * 60 * 1000, max: 10, message: "Too many login attempts. Try again in 15 minutes." });
@@ -46,11 +51,43 @@ router.delete("/promotions/:id", authMiddleware, requirePermission("promotions.m
 router.get("/promotions/:id/grants", authMiddleware, requirePermission("promotions.view"), wrap(promotionController.listGrants));
 router.post("/bonus-grants", authMiddleware, requirePermission("promotions.manage"), wrap(promotionController.grantManual));
 
+// Customer complaints about transactions
+router.get("/support-tickets", authMiddleware, requirePermission("support.view"), wrap(supportAdmin.list));
+router.get("/support-agents", authMiddleware, requirePermission("support.view"), wrap(supportAdmin.agents));
+router.get("/support-tickets/:id", authMiddleware, requirePermission("support.view"), wrap(supportAdmin.detail));
+router.post("/support-tickets/:id/reply", authMiddleware, requirePermission("support.manage"), wrap(supportAdmin.reply));
+router.put("/support-tickets/:id", authMiddleware, requirePermission("support.manage"), wrap(supportAdmin.update));
+
+// Payment audit trail and reconciliation
+router.get("/payment-events", authMiddleware, requirePermission("payments.view"), wrap(paymentLogsController.listEvents));
+router.get("/payments-attention", authMiddleware, requirePermission("payments.view"), wrap(paymentLogsController.attention));
+router.post("/payments/:id/recheck", authMiddleware, requirePermission("payments.manage"), wrap(paymentLogsController.recheck));
+
+// Add Money screen settings: quick amounts, extra bonus, limits
+router.get("/add-money-settings", authMiddleware, requirePermission("addmoney.view"), wrap(addMoneyController.adminGet));
+router.put("/add-money-settings", authMiddleware, requirePermission("addmoney.manage"), wrap(addMoneyController.adminUpdate));
+
+// Payment-page coupons (discounts on wallet top-ups)
+router.get("/coupons", authMiddleware, requirePermission("promotions.view"), wrap(couponController.list));
+router.post("/coupons", authMiddleware, requirePermission("promotions.manage"), wrap(couponController.create));
+router.put("/coupons/:id", authMiddleware, requirePermission("promotions.manage"), wrap(couponController.update));
+router.delete("/coupons/:id", authMiddleware, requirePermission("promotions.manage"), wrap(couponController.remove));
+
 // Promo payouts: free-session time owed to astrologers
 router.get("/promo-payouts", authMiddleware, requirePermission("promopayouts.view"), wrap(promoPayoutController.overview));
 router.get("/promo-payouts/history", authMiddleware, requirePermission("promopayouts.view"), wrap(promoPayoutController.history));
 router.put("/promo-payouts/rate", authMiddleware, requirePermission("promopayouts.manage"), wrap(promoPayoutController.setRate));
 router.post("/promo-payouts/:astrologerId/pay", authMiddleware, requirePermission("promopayouts.manage"), wrap(promoPayoutController.markPaid));
+
+// Astro Store and Planetary Insights content shown in the user app
+router.get("/store-products", authMiddleware, requirePermission("store.view"), wrap(catalogController.store.list));
+router.post("/store-products", authMiddleware, requirePermission("store.manage"), wrap(catalogController.store.create));
+router.put("/store-products/:id", authMiddleware, requirePermission("store.manage"), wrap(catalogController.store.update));
+router.delete("/store-products/:id", authMiddleware, requirePermission("store.manage"), wrap(catalogController.store.remove));
+router.get("/planet-insights", authMiddleware, requirePermission("planets.view"), wrap(catalogController.planets.list));
+router.post("/planet-insights", authMiddleware, requirePermission("planets.manage"), wrap(catalogController.planets.create));
+router.put("/planet-insights/:id", authMiddleware, requirePermission("planets.manage"), wrap(catalogController.planets.update));
+router.delete("/planet-insights/:id", authMiddleware, requirePermission("planets.manage"), wrap(catalogController.planets.remove));
 
 // Dashboard (revenue figures are stripped unless the admin has dashboard.financials)
 router.get("/dashboard-stats", authMiddleware, requirePermission("dashboard.view"), adminController.getDashboardStats);

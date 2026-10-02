@@ -48,7 +48,23 @@ const MODULES = [
         { key: "view", label: "View free-session time owed to astrologers" },
         { key: "manage", label: "Mark promo payouts as paid / change the rate" }
     ] },
-    { key: "banners", label: "Banner management", actions: [{ key: "manage", label: "Manage banners" }] }
+    { key: "banners", label: "Banner management", actions: [{ key: "manage", label: "Manage banners" }] },
+    { key: "store", label: "Astro Store", actions: [
+        { key: "view", label: "View store products" },
+        { key: "manage", label: "Add / edit / remove products, set price and images" }
+    ] },
+    { key: "support", label: "Customer complaints", actions: [
+        { key: "view", label: "View complaints raised about transactions" },
+        { key: "manage", label: "Reply to, assign, resolve or reject complaints" }
+    ] },
+    { key: "addmoney", label: "Add Money settings", actions: [
+        { key: "view", label: "View Add Money settings" },
+        { key: "manage", label: "Change quick amounts, extra bonus and limits" }
+    ] },
+    { key: "planets", label: "Planetary Insights", actions: [
+        { key: "view", label: "View planetary insights" },
+        { key: "manage", label: "Add / edit / remove planetary insights and images" }
+    ] }
 ];
 
 const ALL_PERMISSIONS = MODULES.flatMap((m) => m.actions.map((a) => `${m.key}.${a.key}`));

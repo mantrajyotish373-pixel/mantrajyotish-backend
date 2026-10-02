@@ -63,6 +63,11 @@ const startServer = async () => {
         bonusService.ensureSignupPromotion().catch((e) => console.error("signup promotion setup failed:", e.message));
         bonusService.startExpiryWorker(10);
 
+        require("./src/services/supportRole.service").ensureSupportRole();
+
+        // Payments: settle orders the app never reported and finish interrupted wallet credits
+        require("./src/controllers/razorpay.controller").startReconciliationWorker(60);
+
         server.listen(PORT, () => {
             console.log(`🚀 Server Running on Port ${PORT} with Socket.io Enabled`);
         });

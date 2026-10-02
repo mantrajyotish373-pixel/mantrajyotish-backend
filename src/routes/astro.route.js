@@ -10,7 +10,10 @@ const { optionalAuth } = require("../utils/astroSanitize");
 const { requireSelfAstrologer } = require("../middlewares/callerScope.middleware");
 
 // Profile & Creation
-router.post("/create", astroController.createAstrologer);
+// Authenticated only: an astrologer saves their own profile, an admin with astrologers.edit may create/update any.
+const adminNeedsEditPermission = (req, res, next) =>
+    (req.user.role === "admin" || req.user.role === "superadmin") ? requirePermission("astrologers.edit")(req, res, next) : next();
+router.post("/create", authMiddleware, requireSelfAstrologer, adminNeedsEditPermission, astroController.createAstrologer);
 
 // Listing & Filtering
 router.get("/all", optionalAuth, astroController.getAllAstrologers);

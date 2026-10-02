@@ -131,6 +131,10 @@ const redeemCoupon = async (userId, rawCode) => {
     const now = new Date();
     if (promo.startsAt && promo.startsAt > now) throw new PromoError("NOT_STARTED", "This coupon is not active yet");
     if (promo.endsAt && promo.endsAt < now) throw new PromoError("EXPIRED", "This coupon has expired");
+    // Private code: look exactly like an unknown code to everyone else
+    if (promo.allowedUsers && promo.allowedUsers.length && !promo.allowedUsers.some((u) => String(u) === String(userId))) {
+        throw new PromoError("INVALID_CODE", "This coupon code is not valid");
+    }
 
     if (!(await claimSlot(promo._id, now))) throw new PromoError("FULLY_REDEEMED", "This coupon has been fully redeemed");
     if (!(await claimUserSlot(promo, userId))) {

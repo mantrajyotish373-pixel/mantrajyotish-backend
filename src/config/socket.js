@@ -121,6 +121,15 @@ const initSocket = (server) => {
         if (socket.data.astroId) socket.join(`astro:${socket.data.astroId}`);
         else if (socket.data.userId && socket.data.role !== "admin" && socket.data.role !== "superadmin") socket.join(`user:${socket.data.userId}`);
 
+        // Support staff listen for complaint activity. Membership is decided from the database, not the token.
+        if (socket.data.role === "admin" || socket.data.role === "superadmin") {
+            require("../models/admin.model").findById(socket.data.userId).select("role permissions status").lean()
+                .then((a) => {
+                    if (a && a.status !== "disabled" && (a.role === "superadmin" || (a.permissions || []).includes("support.view"))) socket.join("staff:support");
+                })
+                .catch(() => {});
+        }
+
         // Session Engine events (session:* protocol and the legacy event names)
         registerSessionSocket(io, socket);
         require("../services/session/handlers").onSocketConnected(io, socket).catch((err) => console.error("session connect handling error:", err.message));

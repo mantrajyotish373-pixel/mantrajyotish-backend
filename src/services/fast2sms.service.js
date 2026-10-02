@@ -41,6 +41,11 @@ const sendOtp = async (phone, otp) => {
     }
 
     if (!config.isConfigured) {
+        // Never fall back to the console-only mock in production: that would silently stop real delivery
+        if (process.env.NODE_ENV === "production" && process.env.USE_MOCK_OTP !== "true") {
+            console.error("Fast2SMS is not configured; refusing to send OTP in production.");
+            throw new Error("OTP service is temporarily unavailable. Please try again later.");
+        }
         console.log(`[DEVELOPMENT MOCK FAST2SMS WHATSAPP] OTP for ${cleanPhone} is: ${otp}`);
         return {
             success: true,
@@ -55,7 +60,7 @@ const sendOtp = async (phone, otp) => {
     const messageId = process.env.FAST2SMS_WA_MESSAGE_ID || "33365";
 
     try {
-        console.log(`📲 Sending WhatsApp OTP (${otpStr}) to ${cleanPhone} via Fast2SMS (Message ID: ${messageId})...`);
+        console.log(`📲 Sending WhatsApp OTP to ******${cleanPhone.slice(-4)} via Fast2SMS (Message ID: ${messageId})...`);
 
         // Fast2SMS WhatsApp API POST request
         const response = await fetch("https://www.fast2sms.com/dev/whatsapp", {
@@ -79,7 +84,7 @@ const sendOtp = async (phone, otp) => {
             throw new Error(errMsg);
         }
 
-        console.log(`✅ Fast2SMS WhatsApp OTP sent successfully to ${cleanPhone}. Request ID: ${data.request_id || "N/A"}`);
+        console.log(`✅ Fast2SMS WhatsApp OTP sent successfully to ******${cleanPhone.slice(-4)}. Request ID: ${data.request_id || "N/A"}`);
         return {
             success: true,
             message: "WhatsApp OTP sent successfully",

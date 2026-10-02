@@ -54,6 +54,14 @@ const registerUser = async (req, res, next) => {
             });
         }
 
+        if (typeof phone !== "string" && typeof phone !== "number") {
+            return res.status(400).json({ success: false, message: "Invalid phone number" });
+        }
+        phone = require("../services/fast2sms.service").formatPhoneNumber(phone);
+        if (phone.length !== 10) {
+            return res.status(400).json({ success: false, message: "Phone number must be a valid 10-digit mobile number" });
+        }
+
         // Check existing user by phone
         let existingUser = await User.findOne({ phone });
 
@@ -103,17 +111,12 @@ const registerUser = async (req, res, next) => {
             console.error("Failed to grant signup bonus:", bonusErr.message);
         }
 
-        const token = generateToken({
-            userId: user._id,
-            role: user.role
-        });
-
+        // Staff-created account: no session token is issued. The customer signs in with their own OTP.
         return res.status(201).json({
             success: true,
             message: "User created successfully",
             data: {
-                user,
-                token
+                user
             }
         });
 
@@ -201,6 +204,13 @@ const getUserById = async (req, res, next) => {
 };
 
 // 5. UPDATE USER BY ID / PROFILE
+// Profile fields a customer may change about themselves
+const SELF_EDITABLE_FIELDS = [
+    "name", "firstname", "middlename", "lastname", "gender", "dateofbirth", "timeofbirth",
+    "birthLocation", "birthPlaceDetails", "placeofbirth", "city", "state", "country", "address",
+    "email", "profileImage", "isProfileCompleted"
+];
+
 const updateProfile = async (req, res, next) => {
     try {
         const userId = req.params.id || (req.user && req.user.userId);
@@ -213,14 +223,21 @@ const updateProfile = async (req, res, next) => {
             });
         }
 
-        const updates = { ...req.body };
-        const unsetFields = {};
-
-        // Fields only the system or an admin may change
         const isAdminCaller = req.user && (req.user.role === "admin" || req.user.role === "superadmin");
-        const protectedFields = ["_id", "id", "uniqueId", "userLogin", "createdAt", "updatedAt", "__v"];
-        if (!isAdminCaller) protectedFields.push("role", "walletBalance", "phone");
-        for (const field of protectedFields) delete updates[field];
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        let updates;
+        if (isAdminCaller) {
+            updates = { ...body };
+            for (const field of ["_id", "id", "uniqueId", "userLogin", "createdAt", "updatedAt", "__v", "settledSessions"]) delete updates[field];
+        } else {
+            // A customer edits only their own profile details. Anything else (money fields such as walletBalance /
+            // bonusBalance, settlement markers, role, phone, ids) is never taken from the request.
+            updates = {};
+            for (const field of SELF_EDITABLE_FIELDS) {
+                if (body[field] !== undefined) updates[field] = body[field];
+            }
+        }
+        const unsetFields = {};
 
         if ('email' in updates) {
             if (updates.email && typeof updates.email === "string" && updates.email.trim()) {

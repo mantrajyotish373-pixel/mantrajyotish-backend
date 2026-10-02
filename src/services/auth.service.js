@@ -4,30 +4,62 @@ const Otp = require("../models/otp.model");
 const fast2smsService = require("./fast2sms.service");
 const { generateToken, generateRefreshToken, verifyRefreshToken } = require("../utils/jwt");
 
+const crypto = require("crypto");
+
+const OTP_TTL_MS = 10 * 60 * 1000;
+const RESEND_COOLDOWN_MS = 30 * 1000;
+const MAX_SENDS_PER_WINDOW = 5;   // codes sent to one number within one OTP lifetime
+const MAX_VERIFY_ATTEMPTS = 5;    // wrong guesses before the code is burned
+
+const httpError = (status, message) => {
+    const err = new Error(message);
+    err.status = status;
+    return err;
+};
+
+// The code is stored as an HMAC bound to the phone, so a database read does not reveal usable codes.
+const hashOtp = (phone, otp) =>
+    crypto.createHmac("sha256", process.env.JWT_SECRET || "").update(`${phone}:${otp}`).digest("hex");
+
+const safeEqualHex = (a, b) => {
+    const x = Buffer.from(String(a), "hex");
+    const y = Buffer.from(String(b), "hex");
+    return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+
 /**
  * Send OTP via Fast2SMS
  * @param {string} phone - User phone number
  */
 const sendOtp = async (phone) => {
     if (!phone) {
-        throw new Error("Phone number is required");
+        throw httpError(400, "Phone number is required");
     }
 
     const cleanPhone = fast2smsService.formatPhoneNumber(phone);
     if (!cleanPhone || cleanPhone.length !== 10) {
-        throw new Error("Invalid phone number. Please enter a valid 10-digit mobile number.");
+        throw httpError(400, "Invalid phone number. Please enter a valid 10-digit mobile number.");
     }
 
-    const min = 100000;
-    const max = 999999;
-    const customOtp = Math.floor(Math.random() * (max - min + 1)) + min;
+    // Per-number limits, so one number cannot be flooded with messages (each one costs money)
+    const existing = await Otp.findOne({ phone: cleanPhone }).select("sendCount lastSentAt expiresAt").lean();
+    if (existing && existing.expiresAt > new Date()) {
+        const sinceLast = Date.now() - new Date(existing.lastSentAt || 0).getTime();
+        if (sinceLast < RESEND_COOLDOWN_MS) {
+            throw httpError(429, `Please wait ${Math.ceil((RESEND_COOLDOWN_MS - sinceLast) / 1000)} seconds before requesting another OTP.`);
+        }
+        if ((existing.sendCount || 1) >= MAX_SENDS_PER_WINDOW) {
+            throw httpError(429, "Too many OTP requests for this number. Please try again in a few minutes.");
+        }
+    }
 
-    // Save/update OTP record in database (storing clean 10-digit number & string OTP)
-    await Otp.findOneAndUpdate(
-        { phone: cleanPhone },
-        { phone: cleanPhone, otp: String(customOtp), expiresAt: new Date(Date.now() + 10 * 60 * 1000) }, // 10 minutes expiry
-        { upsert: true, new: true }
-    );
+    const customOtp = crypto.randomInt(100000, 1000000);
+    const fresh = !existing || existing.expiresAt <= new Date();
+
+    // New code: reset the wrong-guess counter. Resends inside one window keep counting toward the send cap.
+    const set = { otp: hashOtp(cleanPhone, customOtp), attempts: 0, lastSentAt: new Date(), expiresAt: new Date(Date.now() + OTP_TTL_MS) };
+    const update = fresh ? { $set: { ...set, sendCount: 1 } } : { $set: set, $inc: { sendCount: 1 } };
+    await Otp.findOneAndUpdate({ phone: cleanPhone }, update, { upsert: true, new: true });
 
     // Trigger Fast2SMS WhatsApp service
     const result = await fast2smsService.sendOtp(cleanPhone, customOtp);
@@ -48,38 +80,54 @@ const sendOtp = async (phone) => {
  */
 const verifyOtp = async (phone, otp) => {
     if (!phone || !otp) {
-        throw new Error("Phone number and OTP code are required");
+        throw httpError(400, "Phone number and OTP code are required");
     }
 
     const cleanPhone = fast2smsService.formatPhoneNumber(phone);
     const cleanOtp = String(otp).trim();
 
-    if (!cleanPhone) {
-        throw new Error("Invalid phone number format");
+    if (!cleanPhone || cleanPhone.length !== 10) {
+        throw httpError(400, "Invalid phone number format");
+    }
+    if (!/^\d{6}$/.test(cleanOtp)) {
+        throw httpError(400, "Invalid OTP. Please check the code sent to your WhatsApp and try again.");
     }
 
-    // Find OTP record by clean 10 digit number or exact string phone
-    const otpRecord = await Otp.findOne({
-        $or: [{ phone: cleanPhone }, { phone: phone }],
-        otp: cleanOtp
-    });
+    // Count this guess first, atomically, so parallel requests cannot out-run the attempt limit
+    const otpRecord = await Otp.findOneAndUpdate(
+        { phone: cleanPhone },
+        { $inc: { attempts: 1 } },
+        { new: true }
+    );
 
     if (!otpRecord) {
-        throw new Error("Invalid OTP. Please check the code sent to your WhatsApp and try again.");
+        throw httpError(400, "Invalid OTP. Please check the code sent to your WhatsApp and try again.");
     }
 
     // Check expiry
     if (otpRecord.expiresAt < new Date()) {
         await Otp.deleteOne({ _id: otpRecord._id });
-        throw new Error("OTP has expired. Please request a new OTP.");
+        throw httpError(400, "OTP has expired. Please request a new OTP.");
     }
 
-    // Delete OTP record after successful verification
-    await Otp.deleteOne({ _id: otpRecord._id });
+    if (otpRecord.attempts > MAX_VERIFY_ATTEMPTS) {
+        await Otp.deleteOne({ _id: otpRecord._id });
+        throw httpError(429, "Too many wrong attempts. Please request a new OTP.");
+    }
+
+    if (!safeEqualHex(otpRecord.otp, hashOtp(cleanPhone, cleanOtp))) {
+        throw httpError(400, "Invalid OTP. Please check the code sent to your WhatsApp and try again.");
+    }
+
+    // Single use: only the request that actually deletes the record may continue
+    const consumed = await Otp.findOneAndDelete({ _id: otpRecord._id });
+    if (!consumed) {
+        throw httpError(400, "This OTP was already used. Please request a new OTP.");
+    }
 
     // Check if user exists, otherwise create
     let user = await User.findOne({
-        $or: [{ phone: cleanPhone }, { phone: phone }]
+        $or: [{ phone: cleanPhone }, { phone: `+91${cleanPhone}` }]
     });
 
     if (!user) {

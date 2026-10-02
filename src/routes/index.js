@@ -42,6 +42,8 @@ router.use("/wallet", walletRoutes);
 router.use("/withdraw", require("./withdraw.route"));
 router.use("/promo", require("./promo.route"));
 router.get("/settings/public", require("../controllers/settings.controller").getPublicSettings);
+router.use("/support", require("./support.route"));
+router.use("/catalog", require("./catalog.route"));
 router.use("/places", placesRoutes);
 router.use("/addresses", deliveryAddressRoutes);
 

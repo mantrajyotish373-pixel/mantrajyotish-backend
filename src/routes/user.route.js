@@ -7,9 +7,9 @@ const authMiddleware = require("../middlewares/auth.middleware");
 const adminMiddleware = require("../middlewares/admin.middleware");
 const { requirePermission } = adminMiddleware;
 
-// Public & Registration routes
-router.post("/register", userController.registerUser);
-router.post("/create", userController.registerUser);
+// Customers are only ever created by a verified OTP login (POST /api/auth/verify-otp).
+// This route is for staff adding a user by hand; it is never open to the public.
+router.post("/create", authMiddleware, requirePermission("users.edit"), userController.registerUser);
 
 // Admin & Listing routes
 router.get("/all", authMiddleware, requirePermission("users.view"), userController.getAllUsers);

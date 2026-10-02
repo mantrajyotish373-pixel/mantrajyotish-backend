@@ -166,6 +166,25 @@ const createAstrologer = async (req, res, next) => {
 
         let astrologer = null;
 
+        // An astrologer can only ever save their own profile: the route pins the caller's Astrologer id
+        // (requireSelfAstrologer). Credentials are never changed through this endpoint, and nothing here
+        // can create a second profile or touch someone else's.
+        if (!isAdminRole(req.user.role)) {
+            delete payload.password;
+            delete payload.email;
+            delete payload.astrologerLogin;
+            delete payload.user;
+            astrologer = await astroService.updateAstrologer(req.body.astrologerId, payload);
+            if (!astrologer) {
+                return res.status(404).json({ success: false, message: "Astrologer profile not found" });
+            }
+            return res.status(200).json({
+                success: true,
+                message: "Astrologer Profile Saved Successfully (Pending Admin Approval)",
+                data: astrologer
+            });
+        }
+
         const queryConditions = [];
         if (payload.astrologerLogin) queryConditions.push({ astrologerLogin: payload.astrologerLogin });
         if (payload.email) queryConditions.push({ email: payload.email });

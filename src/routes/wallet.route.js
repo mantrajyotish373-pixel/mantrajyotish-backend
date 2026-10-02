@@ -85,8 +85,9 @@ router.get("/balance", async (req, res) => {
                 const decoded = verifyToken(authHeader.split(" ")[1]);
                 identifier = decoded.userId || decoded.id || decoded._id || decoded.phone;
                 role = decoded.role;
-            } catch (err) {}
+            } catch (err) { console.log("[BALANCE-DEBUG] token verify failed:", err.message); }
         }
+        console.log("[BALANCE-DEBUG] hasAuth:", !!authHeader, "identifier:", identifier, "role:", role, "query:", JSON.stringify(req.query));
 
         // Identity comes only from a verified token. Guests (no / invalid token)
         // get the zero-balance response below instead of someone else's wallet.
@@ -560,32 +561,36 @@ router.get("/transactions", async (req, res) => {
                 });
             });
         } else {
+            // Plenty of history per source (the app filters and pages it); newest first
+            const HISTORY_LIMIT = 200;
             const [callSessions, chatSessions] = await Promise.all([
                 VideoSession.find({ user: user._id, status: { $in: ["COMPLETED", "ACTIVE"] } })
                     .sort({ updatedAt: -1 })
-                    .limit(20)
+                    .limit(HISTORY_LIMIT)
                     .populate("astrologer", "name")
                     .lean(),
                 ChatSession.find({ user: user._id, status: { $in: ["COMPLETED", "ACTIVE"] } })
                     .sort({ updatedAt: -1 })
-                    .limit(20)
+                    .limit(HISTORY_LIMIT)
                     .populate("astrologer", "name")
                     .lean()
             ]);
+            const sessionStatus = (s) => (s.status === "ACTIVE" ? "In progress" : "Completed");
 
             callSessions.forEach(s => {
                 if (s.totalAmountDeducted > 0) {
                     txns.push({
                         id: String(s._id),
-                        transactionId: String(s._id),
+                        transactionId: s.sessionCode || String(s._id),
                         sessionCode: s.sessionCode || String(s._id),
                         title: `${s.callType === "VIDEO" ? "Video" : "Audio"} Call with ${s.astrologer?.name || "Astrologer"}`,
                         description: `Session Code: ${s.sessionCode || String(s._id)} | Duration: ${s.totalDurationMinutes || 0} mins`,
                         date: formatKolkataDate(s.startTime || s.createdAt),
                         createdAt: s.startTime || s.createdAt,
                         amount: s.totalAmountDeducted,
-                        status: "Completed",
+                        status: sessionStatus(s),
                         type: "debit",
+                        ref: { type: "call", id: String(s._id) },
                         details: {
                             sessionId: String(s._id),
                             sessionCode: s.sessionCode || String(s._id),
@@ -606,15 +611,16 @@ router.get("/transactions", async (req, res) => {
                 if (s.totalAmountDeducted > 0) {
                     txns.push({
                         id: String(s._id),
-                        transactionId: String(s._id),
+                        transactionId: s.sessionCode || String(s._id),
                         sessionCode: s.sessionCode || String(s._id),
                         title: `Chat with ${s.astrologer?.name || "Astrologer"}`,
                         description: `Session Code: ${s.sessionCode || String(s._id)} | Duration: ${s.totalDurationMinutes || 0} mins`,
                         date: formatKolkataDate(s.startTime || s.createdAt),
                         createdAt: s.startTime || s.createdAt,
                         amount: s.totalAmountDeducted,
-                        status: "Completed",
+                        status: sessionStatus(s),
                         type: "debit",
+                        ref: { type: "chat", id: String(s._id) },
                         details: {
                             sessionId: String(s._id),
                             sessionCode: s.sessionCode || String(s._id),
@@ -633,47 +639,84 @@ router.get("/transactions", async (req, res) => {
 
             // Include Payment (top-up / adjustments) records
             try {
-                const payments = await Payment.find({ user: user._id }).sort({ createdAt: -1 }).limit(20).lean();
+                const METHOD = { upi: "UPI", card: "Card", netbanking: "Net Banking", wallet: "Wallet" };
+                const payments = await Payment.find({ user: user._id }).sort({ createdAt: -1 }).limit(HISTORY_LIMIT).lean();
+                const titleFor = (p, isDebit) => {
+                    if (p.paymentGateway !== "Admin") return p.appointment ? "Payment for appointment" : "Added Money";
+                    const t = p.transactionId || "";
+                    if (t.startsWith("SIGNUP_")) return "Signup Reward";
+                    if (t.startsWith("COUPON_")) return "Promo Code Reward";
+                    if (t.startsWith("RECHARGEBONUS_")) return "Recharge Bonus";
+                    if (t.startsWith("ADMINBONUS_")) return "Bonus from Mantra Jyotish";
+                    return isDebit ? "Wallet adjustment" : "Reward from Mantra Jyotish";
+                };
                 payments.forEach(p => {
+                    const age = Date.now() - new Date(p.createdAt).getTime();
+                    const breakdown = p.paymentGateway === "Razorpay" ? {
+                        walletCredit: p.walletCredit != null ? p.walletCredit : p.amount,
+                        paid: p.amount,
+                        gst: p.gstAmount || 0,
+                        gstPercent: p.gstPercent || 0,
+                        discount: p.discountAmount || 0,
+                        couponCode: p.couponCode || null,
+                        extraBonus: p.bonusGranted ? (p.bonusAmount || 0) : 0,
+                        method: METHOD[p.paymentMethod] || null,
+                        orderId: p.orderId || null
+                    } : null;
+                    const base = {
+                        id: String(p._id),
+                        ref: { type: "payment", id: String(p._id) },
+                        createdAt: p.paidAt || p.createdAt,
+                        date: formatKolkataDate(p.paidAt || p.createdAt),
+                        meta: { paymentGateway: p.paymentGateway, transactionId: p.transactionId, orderId: p.orderId, ...(p.couponCode ? { couponCode: p.couponCode, discount: p.discountAmount, paid: p.amount } : {}) },
+                        breakdown
+                    };
                     if (p.paymentStatus === "success") {
                         const isDebit = p.amount < 0;
                         txns.push({
-                            id: String(p._id),
-                            transactionId: p.transactionId || String(p._id),
-                            title: p.paymentGateway === "Admin"
-                                ? (p.transactionId && p.transactionId.startsWith("SIGNUP_") ? `Signup Reward` : p.transactionId && p.transactionId.startsWith("COUPON_") ? `Coupon Reward` : (isDebit ? `Debit Adjustment by Admin` : `Reward from App`))
-                                : (p.appointment ? `Payment for appointment` : `Added Money`),
-                            date: formatKolkataDate(p.paidAt || p.createdAt),
-                            createdAt: p.paidAt || p.createdAt,
-                            amount: Math.abs(p.amount),
+                            ...base,
+                            transactionId: p.transactionId || p.orderId || String(p._id),
+                            title: titleFor(p, isDebit),
+                            amount: Math.abs(p.walletCredit != null ? p.walletCredit : p.amount),
                             status: "Success",
-                            type: isDebit ? "debit" : "credit",
-                            meta: {
-                                paymentGateway: p.paymentGateway,
-                                transactionId: p.transactionId,
-                                orderId: p.orderId
-                            }
+                            type: isDebit ? "debit" : "credit"
                         });
-                    } else if (p.paymentStatus === "failed") {
+                    } else if (p.paymentStatus === "pending" && p.paymentGateway === "Razorpay" && age > 2 * 60 * 1000 && age < 24 * 3600 * 1000) {
                         txns.push({
-                            id: String(p._id),
-                            transactionId: p.transactionId || String(p._id),
-                            title: `Failed Payment`,
-                            date: formatKolkataDate(p.createdAt),
-                            createdAt: p.createdAt,
-                            amount: p.amount,
+                            ...base,
+                            createdAt: p.createdAt, date: formatKolkataDate(p.createdAt),
+                            transactionId: p.transactionId || p.orderId || String(p._id),
+                            title: "Payment Pending",
+                            amount: p.walletCredit != null ? p.walletCredit : p.amount,
+                            status: "Pending",
+                            type: "credit"
+                        });
+                    } else if (p.paymentStatus === "failed" && p.paymentGateway === "Razorpay") {
+                        // Orders the customer simply backed out of are not shown; only real failures are
+                        if (p.failureReason && /cancelled by user/i.test(p.failureReason)) return;
+                        txns.push({
+                            ...base,
+                            createdAt: p.createdAt, date: formatKolkataDate(p.createdAt),
+                            transactionId: p.transactionId || p.orderId || String(p._id),
+                            title: "Failed Payment",
+                            amount: p.walletCredit != null ? p.walletCredit : p.amount,
                             status: "Failed",
-                            type: "failed",
-                            meta: {
-                                paymentGateway: p.paymentGateway,
-                                transactionId: p.transactionId,
-                                orderId: p.orderId
-                            }
+                            type: "failed"
                         });
                     }
                 });
             } catch (e) {
                 console.warn("Could not load payments for transactions view:", e.message);
+            }
+
+            // Attach the customer's complaint (if any) to each transaction
+            try {
+                const SupportTicket = require("../models/supportTicket.model");
+                const tickets = await SupportTicket.find({ user: user._id }).sort({ createdAt: 1 }).select("number status ref.type ref.id").lean();
+                const byRef = new Map(tickets.map((t) => [`${t.ref.type}:${t.ref.id}`, { id: String(t._id), number: t.number, status: t.status }]));
+                txns.forEach((t) => { if (t.ref) t.ticket = byRef.get(`${t.ref.type}:${t.ref.id}`) || null; });
+            } catch (e) {
+                console.warn("Could not attach complaints to transactions:", e.message);
             }
         }
 

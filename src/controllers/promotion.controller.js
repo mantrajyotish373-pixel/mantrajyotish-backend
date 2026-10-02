@@ -10,6 +10,18 @@ const audit = (req, entry) => { req.skipAutoAudit = true; logAudit(req, req.admi
 const validId = (id) => mongoose.Types.ObjectId.isValid(id);
 const num = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
 
+// Turns a list (or newline/comma separated text) of phone numbers into user ids. Empty = open to everyone.
+const resolveAllowedUsers = async (raw) => {
+    const phones = [...new Set((Array.isArray(raw) ? raw : String(raw || "").split(/[\n,;]+/)).map((p) => String(p).trim()).filter(Boolean))];
+    if (phones.length === 0) return [];
+    if (phones.length > 200) throw new Error("A private code can have at most 200 users");
+    const users = await User.find({ phone: { $in: phones } }).select("_id phone").lean();
+    const found = new Set(users.map((u) => u.phone));
+    const missing = phones.filter((p) => !found.has(p));
+    if (missing.length) throw new Error(`No user found for: ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? "…" : ""}. Use the number exactly as registered (e.g. +91…).`);
+    return users.map((u) => u._id);
+};
+
 // Builds a validated field set from the request body (null clears an optional limit).
 const parseFields = (b, { partial }) => {
     const out = {};
@@ -50,7 +62,7 @@ const parseFields = (b, { partial }) => {
 };
 
 const listPromotions = async (req, res) => {
-    const promos = await Promotion.find().sort({ kind: 1, createdAt: -1 }).lean();
+    const promos = await Promotion.find().sort({ kind: 1, createdAt: -1 }).populate("allowedUsers", "name phone").lean();
     const sums = await BonusGrant.aggregate([
         { $match: { promotion: { $ne: null } } },
         { $group: { _id: "$promotion", granted: { $sum: "$amount" }, remaining: { $sum: "$remaining" } } }
@@ -72,6 +84,7 @@ const createPromotion = async (req, res) => {
         if (!/^[A-Z0-9_-]{3,30}$/.test(code)) return fail(res, 400, "Coupon code must be 3 to 30 letters, numbers, - or _");
         if (await Promotion.exists({ code })) return fail(res, 400, "This coupon code already exists");
         const fields = parseFields(b, { partial: false });
+        fields.allowedUsers = await resolveAllowedUsers(b.allowedPhones);
         const promo = await Promotion.create({ ...fields, kind: "coupon", code, createdBy: req.admin._id });
         audit(req, { action: "promotions.create", module: "promotions", statusCode: 201, summary: `Created coupon ${code} (₹${promo.amount})`, details: fields });
         res.status(201).json({ success: true, data: promo });
@@ -91,9 +104,10 @@ const updatePromotion = async (req, res) => {
             if (code !== promo.code && (await Promotion.exists({ code }))) return fail(res, 400, "This coupon code already exists");
             fields.code = code;
         }
+        if (req.body.allowedPhones !== undefined) fields.allowedUsers = await resolveAllowedUsers(req.body.allowedPhones);
         Object.assign(promo, fields);
         await promo.save();
-        const diff = Object.fromEntries(Object.keys(fields).filter((k) => String(before[k]) !== String(promo[k])).map((k) => [k, { from: before[k], to: promo[k] }]));
+        const diff = Object.fromEntries(Object.keys(fields).filter((k) => k !== "allowedUsers" && String(before[k]) !== String(promo[k])).map((k) => [k, { from: before[k], to: promo[k] }]));
         audit(req, { action: fields.status && before.status !== promo.status ? (promo.status === "active" ? "promotions.resume" : "promotions.pause") : "promotions.update", module: "promotions", statusCode: 200, summary: `Updated ${promo.kind === "signup" ? "signup bonus" : `coupon ${promo.code}`}`, details: diff });
         res.json({ success: true, data: promo });
     } catch (e) { fail(res, 400, e.message); }

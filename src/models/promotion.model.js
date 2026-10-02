@@ -19,6 +19,8 @@ const PromotionSchema = new mongoose.Schema(
 
         // Usage limits (null = unlimited)
         maxRedemptions: { type: Number, default: null, min: 1 },
+        // Private codes: when not empty, only these users can redeem the code (empty = anyone)
+        allowedUsers: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], default: [] },
         perUserLimit: { type: Number, default: 1, min: 1 },
         redemptionCount: { type: Number, default: 0, min: 0 },
 

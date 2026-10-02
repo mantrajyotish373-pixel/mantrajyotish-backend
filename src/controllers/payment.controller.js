@@ -71,6 +71,14 @@ const getPaymentById = async (req, res) => {
 
 const updatePayment = async (req, res) => {
     try {
+        // Money that went through the gateway is read-only: its status comes from Razorpay, not from a form.
+        const existing = await paymentService.getPaymentById(req.params.id);
+        if (existing && existing.paymentGateway === "Razorpay") {
+            return res.status(403).json({
+                success: false,
+                message: "Gateway payments are read-only. Use \"Re-check with Razorpay\" in Payment Logs to refresh a payment."
+            });
+        }
 
         const payment = await paymentService.updatePayment(
             req.params.id,
@@ -101,6 +109,14 @@ const updatePayment = async (req, res) => {
 };
 
 const deletePayment = async (req, res) => {
+    // Payment records are the financial ledger: they are never deleted, only corrected through audited wallet adjustments.
+    return res.status(403).json({
+        success: false,
+        message: "Payment records cannot be deleted. They are kept as a permanent financial record."
+    });
+};
+
+const _deletePaymentDisabled = async (req, res) => {
     try {
 
         const payment = await paymentService.deletePayment(req.params.id);

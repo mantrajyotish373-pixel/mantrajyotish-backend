@@ -46,6 +46,18 @@ const fetchPayment = async (payment_id) => {
     return payment;
 };
 
+// All payment attempts Razorpay has on record for an order (used to recover payments the app never reported)
+const fetchOrderPayments = async (order_id) => {
+    if (!order_id) throw new Error("order_id is required");
+    const res = await instance.orders.fetchPayments(order_id);
+    return (res && res.items) || [];
+};
+
+// Captures an authorized payment (auto-capture normally does this, but the status can lag by a moment)
+const capturePayment = async (payment_id, amountPaise, currency = "INR") => {
+    return instance.payments.capture(payment_id, amountPaise, currency);
+};
+
 const verifyWebhookSignature = ({ payload, signature }) => {
     const secret = config.razorpay.webhookSecret;
     if (!secret) {
@@ -64,5 +76,7 @@ module.exports = {
     createOrder,
     verifyPaymentSignature,
     verifyWebhookSignature,
-    fetchPayment
+    fetchPayment,
+    fetchOrderPayments,
+    capturePayment
 };

@@ -6,7 +6,7 @@ const BonusGrantSchema = new mongoose.Schema(
     {
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
         promotion: { type: mongoose.Schema.Types.ObjectId, ref: "Promotion", default: null, index: true },
-        source: { type: String, enum: ["signup", "coupon", "admin", "migration"], required: true },
+        source: { type: String, enum: ["signup", "coupon", "admin", "migration", "recharge"], required: true },
         amount: { type: Number, required: true, min: 0 },
         remaining: { type: Number, required: true, min: 0 },
         status: { type: String, enum: ["active", "exhausted", "expired"], default: "active", index: true },
