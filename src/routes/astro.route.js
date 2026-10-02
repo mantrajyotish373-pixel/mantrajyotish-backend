@@ -5,6 +5,7 @@ const router = express.Router();
 const astroController = require("../controllers/astro.controller");
 const authMiddleware = require("../middlewares/auth.middleware");
 const adminMiddleware = require("../middlewares/admin.middleware");
+const { requireSelfAstrologer } = require("../middlewares/callerScope.middleware");
 
 // Profile & Creation
 router.post("/create", astroController.createAstrologer);
@@ -23,15 +24,15 @@ router.post("/reject", authMiddleware, adminMiddleware, astroController.rejectAs
 router.put("/reject", authMiddleware, adminMiddleware, astroController.rejectAstrologer);
 
 // Online/Offline Status Toggle
-router.put("/toggle-online", authMiddleware, astroController.toggleOnlineStatus);
-router.put("/toggle-online/:id", authMiddleware, astroController.toggleOnlineStatus);
+router.put("/toggle-online", authMiddleware, requireSelfAstrologer, astroController.toggleOnlineStatus);
+router.put("/toggle-online/:id", authMiddleware, requireSelfAstrologer, astroController.toggleOnlineStatus);
 
 // Details by ID
 router.get("/reviews/:id", astroController.getAstrologerReviews);
 router.get("/:id", astroController.getAstrologerById);
 
 // Update & Delete
-router.put("/update/:id", authMiddleware, astroController.updateAstrologer);
+router.put("/update/:id", authMiddleware, requireSelfAstrologer, astroController.updateAstrologer);
 router.delete("/delete/:id", authMiddleware, adminMiddleware, astroController.deleteAstrologer);
 
 module.exports = router;

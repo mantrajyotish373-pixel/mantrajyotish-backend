@@ -209,11 +209,15 @@ const getAllAstrologers = async (req, res, next) => {
             filter.isAvailable = true;
         }
 
-        const astrologers = await astroService.getAllAstrologers(filter);
+        const page = req.query.page ? parseInt(req.query.page, 10) : null;
+        const limit = req.query.limit ? parseInt(req.query.limit, 10) : null;
+
+        const astrologers = await astroService.getAllAstrologers(filter, page, limit);
 
         return res.status(200).json({
             success: true,
             count: astrologers.length,
+            page: page || 1,
             data: astrologers
         });
 

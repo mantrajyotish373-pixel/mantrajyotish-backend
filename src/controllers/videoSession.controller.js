@@ -1,6 +1,5 @@
 const videoSessionService = require("../services/videoSession.service");
 const { getIO } = require("../config/socket");
-const { startCallBillingTimer, stopCallBillingTimer } = require("../services/callBilling.service");
 
 const formatDate = (dateVal) => {
     if (!dateVal) return "Not Specified";
@@ -24,6 +23,16 @@ const generateAgoraToken = async (req, res) => {
             });
         }
 
+        // Only participants of the session that owns this channel may join it
+        const { findAnySession, getParticipantRole } = require("../middlewares/sessionAuth.middleware");
+        const session = await findAnySession(channelName);
+        if (!session || !(await getParticipantRole(session, req.user))) {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden: You are not a participant of this call"
+            });
+        }
+
         const tokenData = videoSessionService.generateAgoraToken(channelName, uid, role);
 
         return res.status(200).json({
@@ -40,302 +49,130 @@ const generateAgoraToken = async (req, res) => {
     }
 };
 
+// 2-5. Call lifecycle (request / accept / reject / end) is owned by the Session Engine
+// (services/session). These endpoints keep their URLs and response shapes and delegate to the
+// same handlers the socket events use.
+const sessionHandlers = require("../services/session/handlers");
+const sessionEngine = require("../services/session/engine");
+const sessionRealtime = require("../services/session/realtime");
+
+const callError = (res, err) => {
+    const d = sessionHandlers.describeError(err);
+    return res.status(d.status || 400).json({ success: false, message: d.message, code: d.code });
+};
+
+const callResponseData = (session) => ({
+    ...session,
+    sessionId: session._id,
+    callId: session._id,
+    _id: session._id,
+    id: session._id
+});
+
 // 2. REQUEST CALL (USER -> ASTROLOGER)
 const requestCall = async (req, res) => {
     try {
-        const { userId, astrologerId, callType, walletBalance } = req.body;
-
-        const effectiveUserId = userId || req.body.user_id || req.body.user || "user_client";
-        const effectiveAstroId = astrologerId || req.body.astrologer_id || req.body.astrologer || "astrologer";
-
-        const session = await videoSessionService.requestCallSession({
-            userId: effectiveUserId,
-            astrologerId: effectiveAstroId,
-            callType: callType || "VIDEO",
-            walletBalance
+        const result = await sessionHandlers.requestSession({
+            decoded: req.user,
+            body: req.body || {},
+            defaultType: "VIDEO",
+            protocol: req.body && req.body.protocol
         });
-
-        // Notify Astrologer via Socket.io across all room variations
-        try {
-            const io = getIO();
-            const Astrologer = require("../models/astro.model");
-            let astroObj = null;
-            const mongoose = require("mongoose");
-            if (mongoose.Types.ObjectId.isValid(astrologerId)) {
-                astroObj = await Astrologer.findById(astrologerId);
-            }
-            if (!astroObj) {
-                astroObj = await Astrologer.findOne({ $or: [{ user: astrologerId }, { astrologerLogin: astrologerId }] });
-            }
-
-            const sessionUserObj = session.user && typeof session.user === "object" ? session.user : {};
-            const resolvedUserName = sessionUserObj.name ||
-                `${sessionUserObj.firstname || ""} ${sessionUserObj.lastname || ""}`.trim() ||
-                (sessionUserObj.phone ? `User (${sessionUserObj.phone})` : "Client User");
-
-
-
-            const flatUser = {
-                _id: sessionUserObj._id || sessionUserObj.id || userId,
-                id: sessionUserObj._id || sessionUserObj.id || userId,
-                name: resolvedUserName,
-                firstname: sessionUserObj.firstname || "",
-                lastname: sessionUserObj.lastname || "",
-                phone: sessionUserObj.phone || "",
-                avatar: sessionUserObj.profileImage || sessionUserObj.avatar || "",
-                profileImage: sessionUserObj.profileImage || sessionUserObj.avatar || "",
-                dob: sessionUserObj.dateofbirth ? formatDate(sessionUserObj.dateofbirth) : (sessionUserObj.dob || "Not Specified"),
-                tob: sessionUserObj.timeofbirth || sessionUserObj.tob || "Not Specified",
-                pob: sessionUserObj.placeofbirth || sessionUserObj.pob || "Not Specified",
-            };
-
-            const payload = {
-                sessionId: session._id,
-                callId: session._id,
-                _id: session._id,
-                id: session._id,
-                callType: session.callType,
-                user: flatUser,
-                astrologer: session.astrologer,
-                perMinuteRate: session.perMinuteRate,
-                channelName: session.channelName,
-                sound: "ringtone.mp3",
-                ringtoneUrl: "/public/sounds/ringtone.mp3",
-                ringtoneDuration: 30,
-                playRingtone: true
-            };
-
-            const targetRooms = new Set();
-            targetRooms.add(`user_${astrologerId}`);
-            targetRooms.add(`astro_${astrologerId}`);
-            targetRooms.add(`astrologer_${astrologerId}`);
-            targetRooms.add(String(astrologerId));
-
-            if (astroObj) {
-                if (astroObj._id) {
-                    targetRooms.add(`user_${astroObj._id}`);
-                    targetRooms.add(`astro_${astroObj._id}`);
-                    targetRooms.add(String(astroObj._id));
-                }
-                if (astroObj.user) {
-                    targetRooms.add(`user_${astroObj.user}`);
-                    targetRooms.add(`astro_${astroObj.user}`);
-                    targetRooms.add(String(astroObj.user));
-                }
-                if (astroObj.astrologerLogin) {
-                    targetRooms.add(`user_${astroObj.astrologerLogin}`);
-                    targetRooms.add(String(astroObj.astrologerLogin));
-                }
-            }
-
-            // Emit to each target room
-            targetRooms.forEach(room => {
-                io.to(room).emit("incoming_call_request", payload);
-            });
-
-            // Global socket broadcast fallback removed for privacy.
-            // Only targeted rooms receive the request.
-            console.log(`📞 Successfully broadcasted incoming_call_request to ${targetRooms.size} rooms for session ${session._id}`);
-
-        } catch (socketErr) {
-            console.log("Socket notification error:", socketErr.message);
-        }
-
+        const populated = await sessionHandlers.withParticipants(result.session);
         return res.status(201).json({
             success: true,
             message: "Call request created and sent to astrologer",
-            data: session
+            data: { ...callResponseData(populated), serverNow: new Date().toISOString() }
         });
-
     } catch (error) {
-        console.error("requestCall error:", error);
-        return res.status(400).json({
-            success: false,
-            message: error.message
-        });
+        return callError(res, error);
     }
 };
 
 // 3. ACCEPT CALL (ASTROLOGER -> USER)
 const acceptCall = async (req, res) => {
     try {
-        const { sessionId } = req.params.id ? { sessionId: req.params.id } : req.body;
-
+        const sessionId = req.params.id || (req.body && (req.body.sessionId || req.body.id || req.body.callId));
         if (!sessionId) {
-            return res.status(400).json({
-                success: false,
-                message: "sessionId is required"
-            });
+            return res.status(400).json({ success: false, message: "sessionId is required" });
         }
-
-        const result = await videoSessionService.acceptCallSession(sessionId);
-
-        // Start Call Billing Timer
-        try {
-            const io = getIO();
-            startCallBillingTimer(sessionId, io);
-
-            // Notify call room & user across all room channels
-            const responsePayload = {
-                success: true,
-                message: "Astrologer accepted call request",
-                sessionId: result.session._id,
-                callId: result.session._id,
-                channelName: result.session.channelName || (result.agora && result.agora.channelName),
-                agora: result.agora,
-                appId: (result.agora && result.agora.appId) || "",
-                token: (result.agora && result.agora.token) || "",
-                session: result.session
-            };
-
-            const rawUser = result.session.user;
-            const userIdForRoom = (rawUser && typeof rawUser === "object")
-                ? String(rawUser._id || rawUser.id || "")
-                : String(rawUser || "");
-
-            io.to(`call_${sessionId}`).emit("call_accepted", responsePayload);
-            if (userIdForRoom) {
-                io.to(`user_${userIdForRoom}`).emit("call_accepted", responsePayload);
-                io.to(userIdForRoom).emit("call_accepted", responsePayload);
-            }
-            io.emit("call_accepted", responsePayload);
-            console.log(`✅ Successfully broadcasted call_accepted for session ${sessionId}`);
-        } catch (socketErr) {
-            console.log("Socket broadcast skipped:", socketErr.message);
-        }
-
+        const result = await sessionHandlers.acceptSession({
+            decoded: req.user,
+            sessionId,
+            protocol: req.body && req.body.protocol
+        });
+        const populated = await sessionHandlers.withParticipants(result.session);
         return res.status(200).json({
             success: true,
             message: "Call request accepted. Live call started!",
-            data: result
+            data: {
+                session: callResponseData(populated),
+                agora: result.agora,
+                status: result.session.status,
+                started: result.started,
+                serverNow: new Date().toISOString()
+            }
         });
-
     } catch (error) {
-        return res.status(400).json({
-            success: false,
-            message: error.message
-        });
+        return callError(res, error);
     }
 };
 
 // 4. REJECT CALL
 const rejectCall = async (req, res) => {
     try {
-        const { sessionId, reason } = req.body;
-        const targetId = req.params.id || sessionId;
-
+        const targetId = req.params.id || (req.body && (req.body.sessionId || req.body.id || req.body.callId));
         if (!targetId) {
-            return res.status(400).json({
-                success: false,
-                message: "sessionId is required"
-            });
+            return res.status(400).json({ success: false, message: "sessionId is required" });
         }
-
-        const session = await videoSessionService.rejectCallSession(targetId, reason);
-
-        try {
-            const io = getIO();
-            const payload = {
-                success: false,
-                message: "Call request was rejected",
-                reason: session.rejectionReason,
-                session
-            };
-            io.to(`call_${targetId}`).emit("call_rejected", payload);
-
-            // Also broadcast to user personal room in case they left the call room
-            const rawUser = session.user;
-            const userId = (rawUser && typeof rawUser === "object")
-                ? String(rawUser._id || rawUser.id || "")
-                : String(rawUser || "");
-            if (userId) {
-                io.to(`user_${userId}`).emit("call_rejected", payload);
-                io.to(userId).emit("call_rejected", payload);
-            }
-        } catch (socketErr) {}
-
+        const result = await sessionHandlers.rejectOrCancel({
+            decoded: req.user,
+            sessionId: targetId,
+            reason: (req.body && req.body.reason) || undefined
+        });
         return res.status(200).json({
             success: true,
             message: "Call request rejected",
-            data: session
+            data: callResponseData(result.session)
         });
-
     } catch (error) {
-        return res.status(400).json({
-            success: false,
-            message: error.message
-        });
+        return callError(res, error);
     }
 };
 
-// 5. END CALL SESSION
+// 5. END CALL SESSION (either participant; the server settles once)
 const endCall = async (req, res) => {
     try {
-        const sessionId = req.params.id || req.body.sessionId;
-
+        const sessionId = req.params.id || (req.body && (req.body.sessionId || req.body.id || req.body.callId));
         if (!sessionId) {
-            return res.status(400).json({
-                success: false,
-                message: "sessionId is required"
-            });
+            return res.status(400).json({ success: false, message: "sessionId is required" });
         }
-
-        stopCallBillingTimer(sessionId);
-        const session = await videoSessionService.endCallSession(sessionId);
-
-        try {
-            const io = getIO();
-            const payload = {
-                success: true,
-                message: "Call session ended",
-                session
-            };
-            io.to(`call_${sessionId}`).emit("call_ended", payload);
-
-            // Safely broadcast to individual user and astrologer personal rooms
-            const extractIdString = (val) => {
-                if (!val) return "";
-                if (typeof val === "string") return val;
-                if (typeof val === "object") {
-                    if (val._id) return String(val._id);
-                    if (val.id) return String(val.id);
-                }
-                return String(val);
-            };
-
-            const userId = extractIdString(session.user);
-            const astroId = extractIdString(session.astrologer);
-
-            if (userId) {
-                io.to(`user_${userId}`).emit("call_ended", payload);
-                io.to(userId).emit("call_ended", payload);
-            }
-            if (astroId) {
-                io.to(`user_${astroId}`).emit("call_ended", payload);
-                io.to(`astro_${astroId}`).emit("call_ended", payload);
-                io.to(`astrologer_${astroId}`).emit("call_ended", payload);
-                io.to(astroId).emit("call_ended", payload);
-            }
-        } catch (socketErr) {}
-
+        const result = await sessionHandlers.endSession({
+            decoded: req.user,
+            sessionId,
+            reason: (req.body && req.body.reason) || "Call consultation ended"
+        });
+        const role = await sessionEngine.roleOf(result.session, { user: req.user });
         return res.status(200).json({
             success: true,
             message: "Call session ended successfully",
-            data: session
+            data: {
+                ...callResponseData(result.session),
+                final: sessionRealtime.finalResult(result.session, role === "ASTROLOGER" ? "ASTROLOGER" : "USER")
+            }
         });
-
     } catch (error) {
-        return res.status(400).json({
-            success: false,
-            message: error.message
-        });
+        return callError(res, error);
     }
 };
 
 // 6. GET CALL HISTORY
 const getCallHistory = async (req, res) => {
     try {
-        const { userId, role } = req.query;
+        const { role } = req.query;
+        const userId = role === "astrologer"
+            ? (req.query.astrologerId || req.query.userId)
+            : req.query.userId;
 
         if (!userId) {
             return res.status(400).json({
@@ -452,11 +289,23 @@ const getPendingCallRequests = async (req, res) => {
             astrologer: { $in: astroIds },
             status: "PENDING",
             createdAt: { $gte: twoMinutesAgo }
-        }).sort({ createdAt: -1 }).populate("user", "firstname lastname phone profileImage dateofbirth timeofbirth placeofbirth name").lean();
+        }).sort({ createdAt: -1 }).populate("user", "name firstname lastname phone profileImage avatar dateofbirth dob timeofbirth tob placeofbirth pob birthLocation topic gender").lean();
+
+        const formatDobDate = (dateVal) => {
+            if (!dateVal) return "Not Specified";
+            if (typeof dateVal === "string") return dateVal.trim();
+            const d = new Date(dateVal);
+            if (isNaN(d.getTime())) return "Not Specified";
+            const day = String(d.getUTCDate()).padStart(2, "0");
+            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            const monthStr = months[d.getUTCMonth()];
+            const year = d.getUTCFullYear();
+            return `${day} ${monthStr} ${year}`;
+        };
 
         const formatted = pendingSessions.map(s => {
             const userObj = s.user || {};
-            const resolvedName = userObj.name || `${userObj.firstname || ""} ${userObj.lastname || ""}`.trim() || userObj.phone || "Client User";
+            const resolvedName = userObj.name || `${userObj.firstname || ""} ${userObj.lastname || ""}`.trim() || (userObj.phone ? `User (${userObj.phone})` : "Client User");
             return {
                 sessionId: s._id,
                 callId: s._id,
@@ -467,12 +316,18 @@ const getPendingCallRequests = async (req, res) => {
                     _id: userObj._id,
                     id: userObj._id,
                     name: resolvedName,
+                    userName: resolvedName,
                     phone: userObj.phone || "",
-                    avatar: userObj.profileImage || "",
-                    profileImage: userObj.profileImage || "",
-                    dob: userObj.dateofbirth ? formatDate(userObj.dateofbirth) : (userObj.dob || "Not Specified"),
+                    avatar: userObj.profileImage || userObj.avatar || "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120&auto=format&fit=crop&q=80",
+                    profileImage: userObj.profileImage || userObj.avatar || "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120&auto=format&fit=crop&q=80",
+                    dob: userObj.dateofbirth ? formatDobDate(userObj.dateofbirth) : (userObj.dob || "Not Specified"),
+                    dateofbirth: userObj.dateofbirth ? formatDobDate(userObj.dateofbirth) : (userObj.dob || "Not Specified"),
                     tob: userObj.timeofbirth || userObj.tob || "Not Specified",
-                    pob: userObj.placeofbirth || userObj.pob || "Not Specified",
+                    timeofbirth: userObj.timeofbirth || userObj.tob || "Not Specified",
+                    pob: userObj.placeofbirth || userObj.pob || (userObj.birthLocation && (userObj.birthLocation.city || userObj.birthLocation.name || userObj.birthLocation.state)) || userObj.city || "Not Specified",
+                    placeofbirth: userObj.placeofbirth || userObj.pob || (userObj.birthLocation && (userObj.birthLocation.city || userObj.birthLocation.name || userObj.birthLocation.state)) || userObj.city || "Not Specified",
+                    topic: userObj.topic || "Astrology Consultation",
+                    gender: userObj.gender || "Not Specified"
                 },
                 astrologer: s.astrologer,
                 perMinuteRate: s.perMinuteRate,
@@ -495,7 +350,7 @@ const getPendingCallRequests = async (req, res) => {
 // 7. RATE CALL SESSION
 const rateVideoSession = async (req, res) => {
     try {
-        const sessionId = req.params.id || req.body.sessionId;
+        const sessionId = req.params.id || req.body.sessionId || req.body.id || req.body.callId;
         const { rating, review } = req.body;
 
         if (!sessionId || !rating) {
@@ -507,10 +362,17 @@ const rateVideoSession = async (req, res) => {
             return res.status(400).json({ success: false, message: "Rating must be between 1 and 5." });
         }
 
+        const Session = require("../models/session.model");
         const VideoSession = require("../models/videoSession.model");
         const Astrologer = require("../models/astro.model");
 
-        const session = await VideoSession.findById(sessionId);
+        let session = await Session.findById(sessionId);
+        if (!session) {
+            session = await VideoSession.findById(sessionId);
+        }
+        if (!session) {
+            session = await Session.findOne({ $or: [{ roomId: sessionId }, { channelName: sessionId }] });
+        }
         if (!session) {
             return res.status(404).json({ success: false, message: "Session not found." });
         }
@@ -519,14 +381,18 @@ const rateVideoSession = async (req, res) => {
         if (review) session.review = review;
         await session.save();
 
+        await VideoSession.findByIdAndUpdate(session._id, { rating: numRating, review: review || "" }).catch(() => null);
+
         // Recalculate astrologer average rating from all rated sessions
         const astrologer = await Astrologer.findById(session.astrologer);
         if (astrologer) {
-            const allRated = await VideoSession.find({ astrologer: session.astrologer, rating: { $ne: null } });
-            const total = allRated.reduce((sum, s) => sum + s.rating, 0);
-            astrologer.rating = Number((total / allRated.length).toFixed(1));
-            astrologer.totalReviews = allRated.length;
-            await astrologer.save();
+            const allRated = await Session.find({ astrologer: session.astrologer, rating: { $ne: null } });
+            if (allRated.length > 0) {
+                const total = allRated.reduce((sum, s) => sum + (s.rating || 0), 0);
+                astrologer.rating = Number((total / allRated.length).toFixed(1));
+                astrologer.totalReviews = allRated.length;
+                await astrologer.save();
+            }
         }
 
         return res.status(200).json({

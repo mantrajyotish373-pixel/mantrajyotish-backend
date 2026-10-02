@@ -4,17 +4,18 @@ const router = express.Router();
 
 const adminController = require("../controllers/admin.controller");
 const authMiddleware = require("../middlewares/auth.middleware");
+const adminMiddleware = require("../middlewares/admin.middleware");
 
 // Admin Registration & Login
-router.post("/register", authMiddleware, adminController.registerAdmin);
-router.post("/create", authMiddleware, adminController.registerAdmin);
+// Only existing admins can create admin accounts
+router.post("/register", authMiddleware, adminMiddleware, adminController.registerAdmin);
+router.post("/create", authMiddleware, adminMiddleware, adminController.registerAdmin);
 router.post("/login", adminController.loginAdmin);
 
 // Logged-in Admin Profile
-router.get("/profile", authMiddleware, adminController.getProfile);
+router.get("/profile", authMiddleware, adminMiddleware, adminController.getProfile);
 
 // Dashboard Statistics
-const adminMiddleware = require("../middlewares/admin.middleware");
 router.get("/dashboard-stats", authMiddleware, adminMiddleware, adminController.getDashboardStats);
 
 // Admin Astrologer CRUD Management

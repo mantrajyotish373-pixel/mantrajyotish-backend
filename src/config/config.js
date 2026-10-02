@@ -30,7 +30,10 @@ module.exports = {
     },
     razorpay: {
         keyId: process.env.RAZORPAY_KEY_ID,
-        keySecret: process.env.RAZORPAY_KEY_SECRET
+        keySecret: process.env.RAZORPAY_KEY_SECRET,
+        // Webhooks are signed with the secret set in Razorpay Dashboard > Webhooks,
+        // which is separate from the API key secret.
+        webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET
     },
     email: {
         smtp: {

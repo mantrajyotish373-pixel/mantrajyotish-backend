@@ -2,8 +2,8 @@ const ChatSession = require("../models/chatSession.model");
 const ChatMessage = require("../models/chatMessage.model");
 const User = require("../models/user.model");
 const Astrologer = require("../models/astro.model");
+const Session = require("../models/session.model");
 const VideoSession = require("../models/videoSession.model");
-const { startBillingTimer, stopBillingTimer } = require("../services/chatBilling.service");
 
 const getSessionIdFromBodyOrParams = (req) => {
     const body = req.body || {};
@@ -42,161 +42,45 @@ const findAstrologerByIdOrRef = async (id) => {
 };
 
 /**
+ * 1-4. Chat lifecycle (initiate / accept / reject / end) is owned by the Session Engine
+ * (services/session). These endpoints keep their URLs and response shapes and delegate to the
+ * same handlers the socket events use.
+ */
+const handlers = require("../services/session/handlers");
+const sessionRealtime = require("../services/session/realtime");
+
+const sendSessionError = (res, err) => {
+    const d = handlers.describeError(err);
+    return res.status(d.status || 400).json({ success: false, message: d.message, code: d.code });
+};
+
+const chatResponseData = (session, extra = {}) => ({
+    ...session,
+    sessionId: session._id,
+    chatId: session._id,
+    _id: session._id,
+    id: session._id,
+    ...extra
+});
+
+/**
  * 1. Initiate Chat Request (User side)
  */
 exports.initiateChat = async (req, res, next) => {
     try {
-        const { userId, astrologerId } = req.body;
-        const currentUserId = userId || (req.user ? req.user.id || req.user._id : null);
-
-        if (!currentUserId || !astrologerId) {
-            return res.status(400).json({
-                success: false,
-                message: "userId and astrologerId are required."
-            });
-        }
-
-        const user = await findUserByIdOrRef(currentUserId);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: `User not found for ID: ${currentUserId}`
-            });
-        }
-
-        const astrologer = await findAstrologerByIdOrRef(astrologerId);
-        if (!astrologer) {
-            return res.status(404).json({
-                success: false,
-                message: `Astrologer not found for ID: ${astrologerId}`
-            });
-        }
-
-        if (astrologer.status !== "approved") {
-            return res.status(403).json({
-                success: false,
-                message: "Astrologer is not approved to accept chat consultations yet."
-            });
-        }
-
-        if (!astrologer.isOnline) {
-            return res.status(400).json({
-                success: false,
-                message: "Astrologer is currently offline."
-            });
-        }
-
-        if (!astrologer.isAvailable) {
-            return res.status(400).json({
-                success: false,
-                message: "Astrologer is busy with another consultation."
-            });
-        }
-
-        const perMinuteRate = 9; // Flat 9 Rupees per minute
-        const minBalanceRequired = perMinuteRate * 2;
-
-        if ((user.walletBalance || 0) < minBalanceRequired) {
-            return res.status(400).json({
-                success: false,
-                message: `Insufficient wallet balance. Minimum ₹${minBalanceRequired} (2 mins) required to initiate chat. Current Balance: ₹${user.walletBalance || 0}`
-            });
-        }
-
-        let session = await ChatSession.findOne({
-            user: user._id,
-            astrologer: astrologer._id,
-            status: { $in: ["PENDING", "ACTIVE"] }
+        const result = await handlers.requestSession({
+            decoded: req.user,
+            body: req.body || {},
+            defaultType: "CHAT",
+            protocol: req.body && req.body.protocol
         });
-
-        if (!session) {
-            session = await ChatSession.create({
-                user: user._id,
-                astrologer: astrologer._id,
-                perMinuteRate,
-                status: "PENDING"
-            });
-        }
-
-        const incomingName = req.body.name || req.body.userName || req.body.fullName || (req.body.user && (req.body.user.name || req.body.user.userName));
-        const dbName = user.name || `${user.firstname || ""} ${user.lastname || ""}`.trim() || user.username;
-        const resolvedName = (incomingName && typeof incomingName === "string" && incomingName.trim())
-            ? incomingName.trim()
-            : (dbName || (user.phone ? `User (${user.phone})` : "Client User"));
-
-        if (incomingName && (!user.name || user.name === "Client User")) {
-            user.name = incomingName;
-            await user.save().catch(() => null);
-        }
-
-        const formatDate = (dateVal) => {
-            if (!dateVal) return "Not Specified";
-            const d = new Date(dateVal);
-            if (isNaN(d.getTime())) return String(dateVal);
-            const day = String(d.getDate()).padStart(2, "0");
-            const month = String(d.getMonth() + 1).padStart(2, "0");
-            const year = d.getFullYear();
-            return `${day}/${month}/${year}`;
-        };
-
-        const userDetails = {
-            _id: user._id,
-            id: user._id,
-            name: resolvedName,
-            firstname: user.firstname || resolvedName.split(" ")[0],
-            lastname: user.lastname || resolvedName.split(" ").slice(1).join(" "),
-            phone: user.phone || "",
-            email: user.email || "",
-            profileImage: user.profileImage || user.avatar || "",
-            dob: user.dateofbirth ? formatDate(user.dateofbirth) : (user.dob || "Not Specified"),
-            tob: user.timeofbirth || user.tob || "Not Specified",
-            pob: user.placeofbirth || user.pob || "Not Specified",
-            gender: user.gender || "Not Specified"
-        };
-
-        const responseData = {
-            ...session.toObject(),
-            user: userDetails,
-            sessionId: session._id,
-            chatId: session._id,
-            _id: session._id,
-            id: session._id
-        };
-
-        // Broadcast to astrologer socket personal rooms & session room
-        try {
-            const { getIO } = require("../config/socket");
-            const io = getIO();
-            if (io) {
-                const payload = {
-                    message: "New incoming chat request!",
-                    session: responseData,
-                    sessionId: session._id,
-                    _id: session._id,
-                    user: userDetails,
-                    sound: "ringtone.mp3",
-                    ringtoneUrl: "/public/sounds/ringtone.mp3",
-                    ringtoneDuration: 30,
-                    playRingtone: true
-                };
-                
-                // Broadcast to Astrologer document ID, User ID, and AstrologerLogin ID rooms
-                io.to(`user_${astrologer._id}`).emit("incoming_chat_request", payload);
-                if (astrologer.user) io.to(`user_${astrologer.user}`).emit("incoming_chat_request", payload);
-                if (astrologer.astrologerLogin) io.to(`user_${astrologer.astrologerLogin}`).emit("incoming_chat_request", payload);
-                io.to(`session_${session._id}`).emit("incoming_chat_request", payload);
-            }
-        } catch (e) {
-            console.error("Socket emit error on initiateChat:", e);
-        }
-
         return res.status(201).json({
             success: true,
             message: "Chat request initiated successfully. Waiting for astrologer acceptance.",
-            data: responseData
+            data: chatResponseData(result.session, { user: result.userDetails, serverNow: new Date().toISOString() })
         });
-
     } catch (error) {
+        if (error && error.name === "SessionError") return sendSessionError(res, error);
         console.error("initiateChat Error:", error);
         next(error);
     }
@@ -208,85 +92,22 @@ exports.initiateChat = async (req, res, next) => {
 exports.acceptChat = async (req, res, next) => {
     try {
         const sessionId = getSessionIdFromBodyOrParams(req);
-
         if (!sessionId) {
-            return res.status(400).json({
-                success: false,
-                message: "sessionId (or chatId / _id / id) is required."
-            });
+            return res.status(400).json({ success: false, message: "sessionId (or chatId / _id / id) is required." });
         }
-
-        const session = await ChatSession.findById(sessionId);
-        if (!session) {
-            return res.status(404).json({
-                success: false,
-                message: "Chat session not found."
-            });
-        }
-
-        if (session.status !== "PENDING" && session.status !== "ACTIVE") {
-            return res.status(400).json({
-                success: false,
-                message: `Session is currently '${session.status}', cannot accept.`
-            });
-        }
-
-        session.status = "ACTIVE";
-        if (!session.startTime) session.startTime = new Date();
-        await session.save();
-
-        // Transition status atomically to BUSY
-        try {
-            const { transitionStatus } = require("../services/presence.service");
-            await transitionStatus(session.astrologer, "BUSY", session._id);
-        } catch (err) {
-            console.error("Failed to transition presence status to BUSY in REST acceptChat:", err.message);
-        }
-
-        const serverNow = new Date().toISOString();
-        const startTimeISO = session.startTime ? new Date(session.startTime).toISOString() : serverNow;
-
-        // Start per-minute billing recurring timer
-        try {
-            const { getIO } = require("../config/socket");
-            const io = getIO();
-            startBillingTimer(sessionId, io);
-
-            if (io) {
-                const responsePayload = {
-                    success: true,
-                    message: "Astrologer accepted chat request. Live session started!",
-                    session,
-                    sessionId: session._id,
-                    _id: session._id,
-                    id: session._id,
-                    startTime: startTimeISO,
-                    serverNow
-                };
-                io.to(`session_${sessionId}`).emit("chat_accepted", responsePayload);
-                io.to(`user_${session.user}`).emit("chat_accepted", responsePayload);
-            }
-        } catch (e) {
-            startBillingTimer(sessionId, null);
-        }
-
-        const responseData = {
-            ...session.toObject(),
-            sessionId: session._id,
-            chatId: session._id,
-            _id: session._id,
-            id: session._id,
-            startTime: startTimeISO,
-            serverNow
-        };
-
+        const result = await handlers.acceptSession({
+            decoded: req.user,
+            sessionId,
+            protocol: req.body && req.body.protocol
+        });
+        const startIso = result.session.startedAt ? new Date(result.session.startedAt).toISOString() : null;
         return res.status(200).json({
             success: true,
             message: "Chat request accepted. Session is now ACTIVE.",
-            data: responseData
+            data: chatResponseData(result.session, { startTime: startIso, startedAt: startIso, serverNow: new Date().toISOString() })
         });
-
     } catch (error) {
+        if (error && error.name === "SessionError") return sendSessionError(res, error);
         next(error);
     }
 };
@@ -297,134 +118,50 @@ exports.acceptChat = async (req, res, next) => {
 exports.rejectChat = async (req, res, next) => {
     try {
         const sessionId = getSessionIdFromBodyOrParams(req);
-
         if (!sessionId) {
-            return res.status(400).json({
-                success: false,
-                message: "sessionId (or chatId / _id / id) is required."
-            });
+            return res.status(400).json({ success: false, message: "sessionId (or chatId / _id / id) is required." });
         }
-
-        const session = await ChatSession.findById(sessionId);
-        if (!session) {
-            return res.status(404).json({
-                success: false,
-                message: "Chat session not found."
-            });
-        }
-
-        session.status = "REJECTED";
-        session.rejectionReason = req.body.reason || "Astrologer rejected the request.";
-        await session.save();
-
-        try {
-            const { getIO } = require("../config/socket");
-            const io = getIO();
-            if (io) {
-                const payload = {
-                    success: false,
-                    message: "Astrologer rejected chat request.",
-                    reason: session.rejectionReason,
-                    session,
-                    sessionId: session._id,
-                    _id: session._id
-                };
-                io.to(`session_${sessionId}`).emit("chat_rejected", payload);
-                io.to(`user_${session.user}`).emit("chat_rejected", payload);
-            }
-        } catch (e) {}
-
-        const responseData = {
-            ...session.toObject(),
-            sessionId: session._id,
-            chatId: session._id,
-            _id: session._id,
-            id: session._id
-        };
-
+        const result = await handlers.rejectOrCancel({
+            decoded: req.user,
+            sessionId,
+            reason: (req.body && req.body.reason) || "Astrologer rejected the request."
+        });
         return res.status(200).json({
             success: true,
             message: "Chat request rejected successfully.",
-            data: responseData
+            data: chatResponseData(result.session)
         });
-
     } catch (error) {
+        if (error && error.name === "SessionError") return sendSessionError(res, error);
         next(error);
     }
 };
 
 /**
- * 4. End Active Chat Session
+ * 4. End Chat Session (either participant). The server decides endedAt, duration, price and
+ * settlement once; a second End returns the same final result.
  */
 exports.endChat = async (req, res, next) => {
     try {
         const sessionId = getSessionIdFromBodyOrParams(req);
-
         if (!sessionId) {
-            return res.status(400).json({
-                success: false,
-                message: "sessionId (or chatId / _id / id) is required."
-            });
+            return res.status(400).json({ success: false, message: "sessionId (or chatId / _id / id) is required." });
         }
-
-        const { endChatSession } = require("../services/chatBilling.service");
-        const session = await endChatSession(sessionId);
-
-        try {
-            const { getIO } = require("../config/socket");
-            const io = getIO();
-            if (io) {
-                const payload = {
-                    success: true,
-                    message: "Chat session ended successfully.",
-                    session,
-                    sessionId: session._id,
-                    _id: session._id
-                };
-                io.to(`session_${sessionId}`).emit("chat_ended", payload);
-
-                // Safely broadcast to individual user and astrologer personal rooms
-                const extractIdString = (val) => {
-                    if (!val) return "";
-                    if (typeof val === "string") return val;
-                    if (typeof val === "object") {
-                        if (val._id) return String(val._id);
-                        if (val.id) return String(val.id);
-                    }
-                    return String(val);
-                };
-
-                const userId = extractIdString(session.user);
-                const astroId = extractIdString(session.astrologer);
-
-                if (userId) {
-                    io.to(`user_${userId}`).emit("chat_ended", payload);
-                    io.to(userId).emit("chat_ended", payload);
-                }
-                if (astroId) {
-                    io.to(`user_${astroId}`).emit("chat_ended", payload);
-                    io.to(`astro_${astroId}`).emit("chat_ended", payload);
-                    io.to(`astrologer_${astroId}`).emit("chat_ended", payload);
-                    io.to(astroId).emit("chat_ended", payload);
-                }
-            }
-        } catch (e) {}
-
-        const responseData = {
-            ...session.toObject(),
-            sessionId: session._id,
-            chatId: session._id,
-            _id: session._id,
-            id: session._id
-        };
-
+        const result = await handlers.endSession({
+            decoded: req.user,
+            sessionId,
+            reason: (req.body && req.body.reason) || "Chat consultation completed"
+        });
+        const role = await require("../services/session/engine").roleOf(result.session, { user: req.user });
         return res.status(200).json({
             success: true,
             message: "Chat session ended successfully.",
-            data: responseData
+            data: chatResponseData(result.session, {
+                final: sessionRealtime.finalResult(result.session, role === "ASTROLOGER" ? "ASTROLOGER" : "USER")
+            })
         });
-
     } catch (error) {
+        if (error && error.name === "SessionError") return sendSessionError(res, error);
         next(error);
     }
 };
@@ -449,17 +186,17 @@ exports.sendMessage = async (req, res, next) => {
         const cleanSessionId = String(sessionId);
         let session = null;
         if (mongoose.Types.ObjectId.isValid(cleanSessionId)) {
-            session = await ChatSession.findById(cleanSessionId).catch(() => null);
-            if (!session) {
-                session = await VideoSession.findById(cleanSessionId).catch(() => null);
-            }
+            // the unified Session is authoritative; the legacy collections are only mirrors
+            session = await Session.findById(cleanSessionId).catch(() => null)
+                || await ChatSession.findById(cleanSessionId).catch(() => null)
+                || await VideoSession.findById(cleanSessionId).catch(() => null);
         }
 
         let normalizedSenderType = String(senderType || "USER").toUpperCase() === "ASTROLOGER" ? "ASTROLOGER" : "USER";
         let validSenderId = (senderId && mongoose.Types.ObjectId.isValid(senderId)) ? senderId : null;
 
         if (session) {
-            if (session.status === "COMPLETED" || session.status === "REJECTED" || session.status === "CANCELLED") {
+            if (["COMPLETED", "REJECTED", "CANCELLED", "MISSED", "ENDING"].includes(session.status)) {
                 return res.status(400).json({
                     success: false,
                     message: "Chat session is no longer active."
@@ -470,7 +207,11 @@ exports.sendMessage = async (req, res, next) => {
             const sessionUser = String(session.user || "");
             const sessionAstro = String(session.astrologer || "");
 
-            const isAstroClaim = String(senderType || "").toUpperCase() === "ASTROLOGER" || (senderId && String(senderId) === sessionAstro) || (authUserId && authUserId === sessionAstro);
+            // sessionAuthMiddleware has already established which side the caller is on;
+            // only fall back to client-supplied hints for admin callers.
+            const isAstroClaim = req.sessionRole && req.sessionRole !== "admin"
+                ? req.sessionRole === "astrologer"
+                : String(senderType || "").toUpperCase() === "ASTROLOGER" || (senderId && String(senderId) === sessionAstro) || (authUserId && authUserId === sessionAstro);
 
             if (isAstroClaim) {
                 normalizedSenderType = "ASTROLOGER";
@@ -617,6 +358,9 @@ exports.getChatHistory = async (req, res, next) => {
 exports.getMySessions = async (req, res, next) => {
     try {
         const { userId, astrologerId, status } = req.query;
+        const page = parseInt(req.query.page, 10) || 1;
+        const limit = parseInt(req.query.limit, 10) || 10;
+        const skip = (page - 1) * limit;
 
         let query = {};
         if (userId) {
@@ -629,21 +373,68 @@ exports.getMySessions = async (req, res, next) => {
         }
         if (status) query.status = status;
 
-        const rawSessions = await ChatSession.find(query)
-            .populate("user", "firstname lastname email phone profileImage")
-            .populate("astrologer", "name profileImage consultationFee rating")
-            .sort({ createdAt: -1 });
+        const totalSessions = await ChatSession.countDocuments(query);
 
-        const sessions = rawSessions.map(s => ({
-            ...s.toObject(),
-            sessionId: s._id,
-            chatId: s._id,
-            id: s._id
-        }));
+        const rawSessions = await ChatSession.find(query)
+            .populate("user", "name firstname lastname email phone profileImage avatar dateofbirth dob timeofbirth tob placeofbirth pob birthLocation topic gender")
+            .populate("astrologer", "name profileImage consultationFee rating")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        const formatDobDate = (dateVal) => {
+            if (!dateVal) return "Not Specified";
+            if (typeof dateVal === "string") return dateVal.trim();
+            const d = new Date(dateVal);
+            if (isNaN(d.getTime())) return "Not Specified";
+            const day = String(d.getUTCDate()).padStart(2, "0");
+            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            const monthStr = months[d.getUTCMonth()];
+            const year = d.getUTCFullYear();
+            return `${day} ${monthStr} ${year}`;
+        };
+
+        const sessions = rawSessions.map(s => {
+            const sObj = s.toObject();
+            const u = sObj.user;
+            if (u && typeof u === "object") {
+                const resolvedName = u.name || `${u.firstname || ""} ${u.lastname || ""}`.trim() || (u.phone ? `User (${u.phone})` : "Client User");
+                sObj.user = {
+                    ...u,
+                    _id: u._id,
+                    id: u._id,
+                    name: resolvedName,
+                    userName: resolvedName,
+                    avatar: u.profileImage || u.avatar || "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120&auto=format&fit=crop&q=80",
+                    profileImage: u.profileImage || u.avatar || "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=120&auto=format&fit=crop&q=80",
+                    dob: u.dateofbirth ? formatDobDate(u.dateofbirth) : (u.dob || "Not Specified"),
+                    dateofbirth: u.dateofbirth ? formatDobDate(u.dateofbirth) : (u.dob || "Not Specified"),
+                    tob: u.timeofbirth || u.tob || "Not Specified",
+                    timeofbirth: u.timeofbirth || u.tob || "Not Specified",
+                    pob: u.placeofbirth || u.pob || (u.birthLocation && (u.birthLocation.city || u.birthLocation.name || u.birthLocation.state)) || u.city || "Not Specified",
+                    placeofbirth: u.placeofbirth || u.pob || (u.birthLocation && (u.birthLocation.city || u.birthLocation.name || u.birthLocation.state)) || u.city || "Not Specified",
+                    topic: u.topic || "Astrology Consultation",
+                    gender: u.gender || "Not Specified"
+                };
+            }
+            return {
+                ...sObj,
+                sessionId: s._id,
+                chatId: s._id,
+                id: s._id
+            };
+        });
+
+        const totalPages = Math.ceil(totalSessions / limit) || 1;
+        const hasMore = page < totalPages;
 
         return res.status(200).json({
             success: true,
             count: sessions.length,
+            total: totalSessions,
+            page,
+            totalPages,
+            hasMore,
             data: sessions
         });
 
@@ -667,7 +458,14 @@ exports.rateChat = async (req, res, next) => {
             });
         }
 
-        const session = await ChatSession.findById(sessionId);
+        const Session = require("../models/session.model");
+        let session = await Session.findById(sessionId);
+        if (!session) {
+            session = await ChatSession.findById(sessionId);
+        }
+        if (!session) {
+            session = await Session.findOne({ $or: [{ roomId: sessionId }, { channelName: sessionId }] });
+        }
         if (!session) {
             return res.status(404).json({
                 success: false,
@@ -679,13 +477,17 @@ exports.rateChat = async (req, res, next) => {
         if (review) session.review = review;
         await session.save();
 
+        await ChatSession.findByIdAndUpdate(session._id, { rating, review: review || "" }).catch(() => null);
+
         const astrologer = await Astrologer.findById(session.astrologer);
         if (astrologer) {
-            const allRatings = await ChatSession.find({ astrologer: session.astrologer, rating: { $ne: null } });
-            const total = allRatings.reduce((sum, item) => sum + item.rating, 0);
-            astrologer.rating = Number((total / allRatings.length).toFixed(1));
-            astrologer.totalReviews = allRatings.length;
-            await astrologer.save();
+            const allRatings = await Session.find({ astrologer: session.astrologer, rating: { $ne: null } });
+            if (allRatings.length > 0) {
+                const total = allRatings.reduce((sum, item) => sum + (item.rating || 0), 0);
+                astrologer.rating = Number((total / allRatings.length).toFixed(1));
+                astrologer.totalReviews = allRatings.length;
+                await astrologer.save();
+            }
         }
 
         return res.status(200).json({

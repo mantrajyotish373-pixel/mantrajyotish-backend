@@ -37,6 +37,7 @@ router.use("/upload", uploadRoutes);
 router.use("/admin", adminRoutes);
 router.use("/interview", astroInterviewRoutes);
 router.use("/chat", chatRoutes);
+router.use("/session", require("./session.route"));
 router.use("/wallet", walletRoutes);
 router.use("/places", placesRoutes);
 router.use("/addresses", deliveryAddressRoutes);

@@ -1,19 +1,25 @@
 const astroInterviewService = require("../services/astroInterview.service");
 const Astrologer = require("../models/astro.model");
 
+const isAdminCaller = (req) => req.user && (req.user.role === "admin" || req.user.role === "superadmin");
+
+// Astrologer tokens carry the Astrologer _id; older ones may carry the AstrologerLogin _id.
+const findCallerAstrologer = async (req) => {
+    if (!req.user || !req.user.userId) return null;
+    return await Astrologer.findOne({
+        $or: [{ _id: req.user.userId }, { astrologerLogin: req.user.userId }]
+    }).catch(() => null);
+};
+
 // 1. ASTROLOGER REQUESTS INTERVIEW
 const requestInterview = async (req, res, next) => {
     try {
-        let astrologerId = req.body.astrologerId || req.body.id || req.body.email;
+        // Admins may request on behalf of an astrologer; everyone else only for themselves
+        let astrologerId = isAdminCaller(req) ? (req.body.astrologerId || req.body.id || req.body.email) : null;
 
-        // If logged in via JWT
-        if (!astrologerId && req.user) {
-            if (req.user.role === "astrologer") {
-                astrologerId = req.user.userId;
-            } else {
-                const astro = await Astrologer.findOne({ astrologerLogin: req.user.userId });
-                if (astro) astrologerId = astro._id;
-            }
+        if (!astrologerId) {
+            const astro = await findCallerAstrologer(req);
+            if (astro) astrologerId = astro._id;
         }
 
         const notes = req.body.notes || req.body.requestNotes || "";
@@ -238,10 +244,10 @@ const getPendingInterviews = async (req, res, next) => {
 // 6. GET MY INTERVIEW / SPECIFIC ASTROLOGER INTERVIEW DETAILS
 const getMyInterview = async (req, res, next) => {
     try {
-        let identifier = req.params.id || req.query.astrologerId || req.query.email || req.query.id;
+        let identifier = isAdminCaller(req) ? (req.params.id || req.query.astrologerId || req.query.email || req.query.id) : null;
 
-        if (!identifier && req.user) {
-            const astro = await Astrologer.findOne({ astrologerLogin: req.user.userId });
+        if (!identifier) {
+            const astro = await findCallerAstrologer(req);
             if (astro) identifier = astro._id;
         }
 
@@ -314,7 +320,8 @@ const getMyInterview = async (req, res, next) => {
 const getInterviewToken = async (req, res, next) => {
     try {
         const { id } = req.params; // interviewId
-        const { role } = req.query; // "admin" or "astrologer"
+        // The token role follows the caller, not the query string
+        const role = isAdminCaller(req) ? "admin" : "astrologer";
         
         const AstroInterview = require("../models/astroInterview.model");
         const agoraService = require("../services/agora.service");
@@ -322,6 +329,13 @@ const getInterviewToken = async (req, res, next) => {
         const interview = await AstroInterview.findById(id);
         if (!interview) {
             return res.status(404).json({ success: false, message: "Interview session not found" });
+        }
+
+        if (role === "astrologer") {
+            const astro = await findCallerAstrologer(req);
+            if (!astro || String(astro._id) !== String(interview.astrologer)) {
+                return res.status(403).json({ success: false, message: "Forbidden: This interview does not belong to you" });
+            }
         }
 
         if (!interview.agoraChannel) {

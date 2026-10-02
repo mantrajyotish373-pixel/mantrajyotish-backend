@@ -7,7 +7,13 @@ const instance = new Razorpay({
     key_secret: config.razorpay.keySecret
 });
 
-const createOrder = async ({ amount, currency = "INR", receipt = null, payment_capture = 1 } = {}) => {
+// Constant-time comparison of hex HMAC signatures
+const safeEqualHex = (expected, received) => {
+    if (typeof received !== "string" || received.length !== expected.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(received, "utf8"));
+};
+
+const createOrder = async ({ amount, currency = "INR", receipt = null, payment_capture = 1, notes = null } = {}) => {
     if (!amount || Number(amount) <= 0) throw new Error("Invalid amount");
 
     // Razorpay expects amount in paise
@@ -20,6 +26,7 @@ const createOrder = async ({ amount, currency = "INR", receipt = null, payment_c
     };
 
     if (receipt) options.receipt = receipt;
+    if (notes) options.notes = notes;
 
     const order = await instance.orders.create(options);
     return order;
@@ -30,7 +37,7 @@ const verifyPaymentSignature = ({ order_id, payment_id, signature }) => {
         .update(`${order_id}|${payment_id}`)
         .digest('hex');
 
-    return generated_signature === signature;
+    return safeEqualHex(generated_signature, signature);
 };
 
 const fetchPayment = async (payment_id) => {
@@ -40,11 +47,17 @@ const fetchPayment = async (payment_id) => {
 };
 
 const verifyWebhookSignature = ({ payload, signature }) => {
-    const generated = crypto.createHmac('sha256', config.razorpay.keySecret)
+    const secret = config.razorpay.webhookSecret;
+    if (!secret) {
+        console.error("RAZORPAY_WEBHOOK_SECRET is not configured; rejecting webhook.");
+        return false;
+    }
+
+    const generated = crypto.createHmac('sha256', secret)
         .update(payload)
         .digest('hex');
 
-    return generated === signature;
+    return safeEqualHex(generated, signature);
 };
 
 module.exports = {

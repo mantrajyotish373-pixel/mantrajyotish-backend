@@ -97,7 +97,7 @@ const enrichAstrologersWithStats = async (astrologersList) => {
     }));
 };
 
-const getAllAstrologers = async (filter = {}) => {
+const getAllAstrologers = async (filter = {}, page = null, limit = null) => {
     // Default to status: "approved" for public listing unless custom status filter is requested
     const query = { ...filter };
     if (!query.status && query.status !== "all") {
@@ -106,11 +106,17 @@ const getAllAstrologers = async (filter = {}) => {
         delete query.status;
     }
 
-    const astrologers = await Astrologer.find(query)
+    let mongoQuery = Astrologer.find(query)
         .sort({ isOnline: -1, isAvailable: -1, rating: -1, totalConsultations: -1, createdAt: -1 })
         .populate("user")
-        .populate("astrologerLogin")
-        .lean();
+        .populate("astrologerLogin");
+
+    if (page && limit) {
+        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+        mongoQuery = mongoQuery.skip(skip).limit(parseInt(limit, 10));
+    }
+
+    const astrologers = await mongoQuery.lean();
 
     const enriched = await enrichAstrologersWithStats(astrologers);
 
@@ -308,6 +314,7 @@ module.exports = {
     getAllAstrologers,
     getPendingAstrologers,
     getOnlineAstrologers,
+    rebuildOnlineAstrologersCache,
     getAstrologerById,
     approveAstrologer,
     rejectAstrologer,

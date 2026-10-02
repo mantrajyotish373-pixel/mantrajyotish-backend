@@ -44,8 +44,7 @@ const registerUser = async (req, res, next) => {
             country,
             address,
             phone,
-            email,
-            role
+            email
         } = req.body;
 
         if (!phone) {
@@ -88,7 +87,8 @@ const registerUser = async (req, res, next) => {
             address: address || null,
             phone,
             email: email && email.trim() ? email.trim().toLowerCase() : undefined,
-            role: role || "user",
+            // Public signup always creates a regular user; roles are never client-controlled
+            role: "user",
             isProfileCompleted: Boolean(name || (firstname && lastname)),
             walletBalance: 100
         });
@@ -223,6 +223,12 @@ const updateProfile = async (req, res, next) => {
 
         const updates = { ...req.body };
         const unsetFields = {};
+
+        // Fields only the system or an admin may change
+        const isAdminCaller = req.user && (req.user.role === "admin" || req.user.role === "superadmin");
+        const protectedFields = ["_id", "id", "uniqueId", "userLogin", "createdAt", "updatedAt", "__v"];
+        if (!isAdminCaller) protectedFields.push("role", "walletBalance", "phone");
+        for (const field of protectedFields) delete updates[field];
 
         if ('email' in updates) {
             if (updates.email && typeof updates.email === "string" && updates.email.trim()) {

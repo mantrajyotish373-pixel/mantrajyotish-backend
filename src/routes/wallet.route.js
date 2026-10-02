@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const User = require("../models/user.model");
 const mongoose = require("mongoose");
+const authMiddleware = require("../middlewares/auth.middleware");
+const adminMiddleware = require("../middlewares/admin.middleware");
 
 /**
  * Robust User Resolver: Finds user by MongoDB _id, phone, uniqueId, email, or userLogin
@@ -86,19 +88,9 @@ router.get("/balance", async (req, res) => {
             } catch (err) {}
         }
 
-        if (!identifier) {
-            identifier = req.query.userId || req.query.user_id || req.query.phone || req.query.id;
-        }
-
-        if (!role) {
-            role = req.query.role || null;
-        }
-
-        const phoneFallback = req.query.phone || null;
-
-        if (!identifier && !phoneFallback) {
-            return res.status(400).json({ success: false, message: "User ID or phone number is required" });
-        }
+        // Identity comes only from a verified token. Guests (no / invalid token)
+        // get the zero-balance response below instead of someone else's wallet.
+        const phoneFallback = null;
 
         let user = null;
         let astrologer = null;
@@ -170,24 +162,11 @@ router.get("/balance", async (req, res) => {
  * Adds funds to user's wallet balance in MongoDB.
  * Body: { amount: Number, userId?: String, phone?: String }
  */
-router.post("/add", async (req, res) => {
+router.post("/add", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-        let identifier = null;
-
-        // Check JWT token
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith("Bearer ")) {
-            try {
-                const { verifyToken } = require("../utils/jwt");
-                const decoded = verifyToken(authHeader.split(" ")[1]);
-                identifier = decoded.userId || decoded.id || decoded._id || decoded.phone;
-            } catch (err) {}
-        }
-
-        if (!identifier) {
-            identifier = req.body.userId || req.body.user_id || req.body.phone || req.body.id;
-        }
-
+        // Admin-only manual credit. Customer top-ups must go through Razorpay
+        // (/api/razorpay/order + /verify), which credits the wallet after payment.
+        const identifier = req.body.userId || req.body.user_id || req.body.id || null;
         const phoneFallback = req.body.phone || null;
         const { amount } = req.body;
 
@@ -196,27 +175,18 @@ router.post("/add", async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid deposit amount. Must be a positive number." });
         }
 
-        let user = await findUserByIdentifier(identifier, phoneFallback);
-
-        // If user document does not exist yet in DB (e.g. initial onboarding), create one!
-        if (!user && (phoneFallback || (identifier && identifier.includes("+")))) {
-            const targetPhone = phoneFallback || identifier;
-            user = await User.create({
-                phone: targetPhone.startsWith("+91") ? targetPhone : "+91" + targetPhone.replace(/\D/g, ""),
-                walletBalance: numericAmount
-            });
-        } else if (!user) {
-            // Find any latest user if fallback
-            user = await User.findOne().sort({ createdAt: -1 });
-        }
-
-        if (!user) {
+        const target = await findUserByIdentifier(identifier, phoneFallback);
+        if (!target) {
             return res.status(404).json({ success: false, message: "User record not found in system." });
         }
 
-        const previousBalance = user.walletBalance || 0;
-        user.walletBalance = previousBalance + numericAmount;
-        await user.save();
+        // Atomic increment so concurrent credits/debits are not lost
+        const user = await User.findByIdAndUpdate(
+            target._id,
+            { $inc: { walletBalance: numericAmount } },
+            { new: true }
+        );
+        const previousBalance = (user.walletBalance || 0) - numericAmount;
 
         console.log(`💰 Added ₹${numericAmount} to User ${user._id} (${user.phone}). New balance: ₹${user.walletBalance}`);
 
@@ -241,7 +211,7 @@ router.post("/add", async (req, res) => {
  * Admins use this to directly adjust a user's wallet balance.
  * Body: { userId: String, amount: Number, action: 'add'|'deduct' }
  */
-router.post("/update-balance", async (req, res) => {
+router.post("/update-balance", authMiddleware, adminMiddleware, async (req, res) => {
     try {
         const { userId, amount, action } = req.body;
         const numericAmount = parseFloat(amount);
@@ -303,31 +273,14 @@ router.post("/update-balance", async (req, res) => {
  * Astrologer requests withdrawal of funds.
  * Body: { amount: Number, payoutMethod: 'upi'|'bank', upiId?: String, accountNumber?: String, ifscCode?: String, accountHolder?: String }
  */
-router.post("/withdraw", async (req, res) => {
+router.post("/withdraw", authMiddleware, async (req, res) => {
     try {
-        let identifier = null;
-        let role = null;
-
-        // Check JWT token
-        const authHeader = req.headers.authorization;
-        if (authHeader && authHeader.startsWith("Bearer ")) {
-            try {
-                const { verifyToken } = require("../utils/jwt");
-                const decoded = verifyToken(authHeader.split(" ")[1]);
-                identifier = decoded.userId || decoded.id || decoded._id || decoded.phone;
-                role = decoded.role;
-            } catch (err) {}
+        if (req.user.role !== "astrologer") {
+            return res.status(403).json({ success: false, message: "Only astrologers can request withdrawals." });
         }
 
-        if (!identifier) {
-            identifier = req.body.userId || req.body.user_id || req.body.phone || req.body.id;
-        }
-
-        if (!role) {
-            role = req.body.role || "astrologer";
-        }
-
-        const phoneFallback = req.body.phone || null;
+        // Withdrawals are always for the authenticated astrologer
+        const identifier = req.user.userId;
         const { amount, payoutMethod, upiId, accountNumber, ifscCode, accountHolder } = req.body;
 
         const numericAmount = parseFloat(amount);
@@ -346,24 +299,11 @@ router.post("/withdraw", async (req, res) => {
             astrologer = await Astrologer.findById(identifier);
         }
         if (!astrologer && identifier) {
-            astrologer = await Astrologer.findOne({
-                $or: [
-                    { email: identifier },
-                    { phone: identifier },
-                    { name: identifier }
-                ]
-            });
-        }
-        if (!astrologer && phoneFallback) {
-            astrologer = await Astrologer.findOne({ phone: phoneFallback });
+            astrologer = await Astrologer.findOne({ astrologerLogin: identifier });
         }
 
         if (!astrologer) {
             return res.status(404).json({ success: false, message: "Astrologer record not found in system." });
-        }
-
-        if ((astrologer.walletBalance || 0) < numericAmount) {
-            return res.status(400).json({ success: false, message: "Insufficient wallet balance for withdrawal." });
         }
 
         if (payoutMethod === "upi" && !upiId) {
@@ -374,9 +314,15 @@ router.post("/withdraw", async (req, res) => {
             return res.status(400).json({ success: false, message: "Complete Bank account details are required." });
         }
 
-        // Deduct from Astrologer wallet
-        astrologer.walletBalance = (astrologer.walletBalance || 0) - numericAmount;
-        await astrologer.save();
+        // Atomic conditional deduction: prevents concurrent requests from overdrawing
+        const debited = await Astrologer.findOneAndUpdate(
+            { _id: astrologer._id, walletBalance: { $gte: numericAmount } },
+            { $inc: { walletBalance: -numericAmount } },
+            { new: true }
+        );
+        if (!debited) {
+            return res.status(400).json({ success: false, message: "Insufficient wallet balance for withdrawal." });
+        }
 
         // Create Payout request
         const Payout = require("../models/payout.model");
@@ -424,9 +370,8 @@ router.get("/transactions", async (req, res) => {
             } catch (err) {}
         }
 
-        if (!identifier) identifier = req.query.userId || req.query.phone;
-        if (!role) role = req.query.role || null;
-        const phoneFallback = req.query.phone || null;
+        // Identity comes only from a verified token
+        const phoneFallback = null;
 
         let user = null;
         let astrologer = null;
@@ -711,7 +656,7 @@ router.get("/transactions", async (req, res) => {
  * GET /api/wallet/admin/profit
  * Returns company profit (admin wallet balance and platform fee summary)
  */
-router.get("/admin/profit", async (req, res) => {
+router.get("/admin/profit", authMiddleware, adminMiddleware, async (req, res) => {
     try {
         const Admin = require("../models/admin.model");
         const VideoSession = require("../models/videoSession.model");

@@ -180,6 +180,16 @@ const UserSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+
+    // Session ids whose settlement has already been applied to this wallet (idempotency marker;
+    // bounded to the most recent entries by the settlement code)
+    settledSessions: {
+        // User wallet markers also record the exact before/after balance of that settlement,
+        // written atomically with the debit, so the ledger row is correct however callers race.
+        type: [{ _id: false, sid: mongoose.Schema.Types.ObjectId, before: Number, after: Number }],
+        default: undefined,
+        select: false
+    },
   },
   {
     timestamps: true,

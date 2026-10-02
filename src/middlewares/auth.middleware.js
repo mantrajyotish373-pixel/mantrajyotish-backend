@@ -19,7 +19,9 @@ const authMiddleware = (req, res, next) => {
 
         const decoded = verifyToken(token);
 
-        req.user = decoded;
+        // Tokens carry `userId`; controllers historically read `id` / `_id`, so expose all three.
+        const callerId = decoded.userId || decoded.id || decoded._id;
+        req.user = { ...decoded, userId: callerId, id: callerId, _id: callerId };
 
         next();
 

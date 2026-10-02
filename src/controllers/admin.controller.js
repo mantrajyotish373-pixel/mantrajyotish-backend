@@ -11,7 +11,15 @@ const adminService = require("../services/admin.service");
 // 1. REGISTER / CREATE ADMIN
 const registerAdmin = async (req, res, next) => {
     try {
-        const result = await adminService.createAdmin(req.body);
+        const requestedRole = req.body.role || "admin";
+        if (!["admin", "superadmin"].includes(requestedRole)) {
+            return res.status(400).json({ success: false, message: "Invalid admin role" });
+        }
+        if (requestedRole === "superadmin" && req.user.role !== "superadmin") {
+            return res.status(403).json({ success: false, message: "Only a superadmin can create another superadmin" });
+        }
+
+        const result = await adminService.createAdmin({ ...req.body, role: requestedRole });
 
         return res.status(201).json({
             success: true,

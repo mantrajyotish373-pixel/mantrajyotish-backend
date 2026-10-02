@@ -39,30 +39,11 @@ const findUserByIdentifier = async (identifier, phoneFallback = null) => {
     return user;
 };
 
-/** Shared helper to robustly resolve user from request headers or body */
+/** Resolves the paying user from the verified JWT (routes require authMiddleware) */
 const resolveUserFromRequest = async (req) => {
-    let identifier = null;
-
-    // 1. Try finding via Authorization JWT token
-    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer ")) {
-        try {
-            const { verifyToken } = require("../utils/jwt");
-            const decoded = verifyToken(req.headers.authorization.split(" ")[1]);
-            identifier = decoded.userId || decoded.id || decoded._id || decoded.phone || null;
-        } catch (e) {
-            // Ignore token verification errors (e.g. expired tokens)
-        }
-    }
-
-    // 2. Fallback to request body parameters
-    if (!identifier) {
-        identifier = req.body.userId || req.body.user_id || req.body.phone || req.body.id || null;
-    }
-
-    const phoneFallback = req.body.phone || null;
-    if (!identifier && !phoneFallback) return null;
-
-    return await findUserByIdentifier(identifier, phoneFallback);
+    const identifier = req.user && (req.user.userId || req.user.id);
+    if (!identifier) return null;
+    return await findUserByIdentifier(String(identifier));
 };
 
 // POST /api/razorpay/order
@@ -80,7 +61,8 @@ const createOrder = async (req, res) => {
             return res.status(401).json({ success: false, message: "Authentication required or user not found" });
         }
 
-        const order = await razorpayService.createOrder({ amount, currency, receipt, payment_capture });
+        // notes.userId lets the webhook attribute the payment even if no local record exists
+        const order = await razorpayService.createOrder({ amount, currency, receipt, payment_capture, notes: { userId: String(user._id) } });
 
         // Persist a Payment record (pending) so we can reconcile later.
         const appointmentId = req.body.appointmentId || req.body.appointment || null;
@@ -121,11 +103,18 @@ const processSuccessfulPayment = async ({
     source = 'VERIFY', // 'VERIFY' | 'WEBHOOK'
 }) => {
     // 1. Authoritative Amount Calculation: prefer Razorpay paymentEntity (in paise -> rupees)
+    // The client-supplied amount is never trusted: when Razorpay's payment entity is
+    // unavailable we fall back to the amount recorded server-side at order creation.
     let creditedAmount = null;
     if (paymentEntity && paymentEntity.amount) {
+        if (orderId && paymentEntity.order_id && paymentEntity.order_id !== orderId) {
+            console.warn(`[${source}_ORDER_MISMATCH] Payment ${transactionId} belongs to order ${paymentEntity.order_id}, not ${orderId}`);
+            return { claimed: false, reason: 'ORDER_MISMATCH', payment: null };
+        }
+        if (paymentEntity.status && !['captured', 'authorized'].includes(paymentEntity.status)) {
+            return { claimed: false, reason: 'PAYMENT_NOT_CAPTURED', payment: null };
+        }
         creditedAmount = Number(paymentEntity.amount) / 100;
-    } else if (clientAmount) {
-        creditedAmount = Number(clientAmount);
     }
 
     // 2. Find existing payment record by orderId or transactionId
@@ -139,8 +128,13 @@ const processSuccessfulPayment = async ({
             console.warn(`[${source}_CLAIM_FAIL] No payment record and could not resolve user. Order: ${orderId}`);
             return { claimed: false, reason: 'USER_NOT_RESOLVED', payment: null };
         }
+        if (creditedAmount == null) {
+            // No local order record and no authoritative amount from Razorpay: refuse to guess
+            console.warn(`[${source}_CLAIM_FAIL] No authoritative amount for order ${orderId}`);
+            return { claimed: false, reason: 'AMOUNT_UNVERIFIED', payment: null };
+        }
         try {
-            const finalAmt = creditedAmount != null ? creditedAmount : (clientAmount ? Number(clientAmount) : 0);
+            const finalAmt = creditedAmount;
             payment = await Payment.create({
                 user: resolvedUser._id,
                 amount: finalAmt,
@@ -195,7 +189,7 @@ const processSuccessfulPayment = async ({
     console.log(`[${source}_CLAIMED_SUCCESS] Successfully claimed payment ${claimedPayment._id} for processing.`);
 
     // 5. ATOMIC WALLET CREDIT ($inc)
-    const finalCreditedAmt = creditedAmount != null ? creditedAmount : Number(claimedPayment.amount);
+    const finalCreditedAmt = Number(claimedPayment.amount);
     if (claimedPayment.appointment) {
         try {
             await Appointment.findByIdAndUpdate(claimedPayment.appointment, {
@@ -255,8 +249,14 @@ const verifyPayment = async (req, res) => {
             source: 'VERIFY',
         });
 
-        if (!result.payment && result.reason === 'USER_NOT_RESOLVED') {
-            return res.status(400).json({ success: false, message: "Could not resolve user to associate with payment" });
+        if (!result.payment) {
+            const messages = {
+                USER_NOT_RESOLVED: "Could not resolve user to associate with payment",
+                ORDER_MISMATCH: "Payment does not belong to this order",
+                PAYMENT_NOT_CAPTURED: "Payment has not been captured",
+                AMOUNT_UNVERIFIED: "Could not verify payment amount. It will be credited once Razorpay confirms it.",
+            };
+            return res.status(400).json({ success: false, message: messages[result.reason] || "Payment could not be processed" });
         }
 
         return res.status(200).json({
@@ -297,8 +297,16 @@ const webhookHandler = async (req, res) => {
             return res.status(400).send('invalid signature');
         }
 
-        const event = req.body.event;
-        const payloadData = req.body.payload || {};
+        // express.raw leaves req.body as a Buffer; parse the verified payload ourselves
+        let parsedBody;
+        try {
+            parsedBody = Buffer.isBuffer(req.body) ? JSON.parse(payload) : req.body;
+        } catch (e) {
+            return res.status(400).send('invalid payload');
+        }
+
+        const event = parsedBody.event;
+        const payloadData = parsedBody.payload || {};
 
         // Example: payment captured
         if (event === "payment.captured") {

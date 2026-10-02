@@ -183,6 +183,14 @@ const AstroSchema = new mongoose.Schema(
             min: 0
         },
 
+        // Session ids whose settlement has already been applied to this wallet (idempotency marker;
+        // bounded to the most recent entries by the settlement code)
+        settledSessions: {
+            type: [mongoose.Schema.Types.ObjectId],
+            default: undefined,
+            select: false
+        },
+
         isVerified: {
             type: Boolean,
             default: false

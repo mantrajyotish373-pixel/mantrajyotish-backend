@@ -54,6 +54,10 @@ const startServer = async () => {
         // Connect to MongoDB
         await connectDB();
 
+        // Session Engine clock: expiry, balance limits, ticks and settlement recovery.
+        // One loop evaluating stored deadlines, no per-session timers.
+        require("./src/services/session/scheduler").start();
+
         server.listen(PORT, () => {
             console.log(`🚀 Server Running on Port ${PORT} with Socket.io Enabled`);
         });
@@ -64,4 +68,4 @@ const startServer = async () => {
     }
 };
 
-startServer();
+startServer();
