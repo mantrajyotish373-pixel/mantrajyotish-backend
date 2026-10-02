@@ -18,7 +18,9 @@ const User = require("../../models/user.model");
 const Astrologer = require("../../models/astro.model");
 const Admin = require("../../models/admin.model");
 const WalletTransaction = require("../../models/walletTransaction.model");
+const PromoLedger = require("../../models/promoLedger.model");
 const { calculateSessionBilling } = require("../sessionBilling.service");
+const { splitCostForBonus, consumeGrants } = require("../bonus.service");
 const { STATUS } = require("./states");
 const { SessionError } = require("./errors");
 const availability = require("./availability");
@@ -52,15 +54,20 @@ const markerPush = (sid) => ({ $push: { settledSessions: { $each: [sid], $slice:
  * written in the same atomic update (all expressions in one $set stage read the pre-update
  * document), so the audit values can always be read back, whichever caller applied the leg.
  */
-const applyUserLeg = async (session, totalCost) => {
+const applyUserLeg = async (session, totalCost, bonusAmount = 0) => {
     const sid = session._id;
     const balance = { $ifNull: ["$walletBalance", 0] };
+    const bonus = { $ifNull: ["$bonusBalance", 0] };
+    const newWallet = { $max: [0, { $subtract: [balance, totalCost] }] };
+    // bonus part shrinks by exactly what this session used from it, and can never exceed the wallet
+    const newBonus = { $min: [{ $max: [0, { $subtract: [bonus, bonusAmount] }] }, newWallet] };
     await User.findOneAndUpdate(
         { _id: session.user, "settledSessions.sid": { $ne: sid } },
         [
             {
                 $set: {
-                    walletBalance: { $max: [0, { $subtract: [balance, totalCost] }] },
+                    walletBalance: newWallet,
+                    bonusBalance: newBonus,
                     settledSessions: {
                         $slice: [
                             {
@@ -86,12 +93,15 @@ const applyUserLeg = async (session, totalCost) => {
     return entry ? { before: entry.before, after: entry.after } : null;
 };
 
-const applyAstrologerLeg = async (session, earnings) => {
-    if (!(earnings > 0)) return;
+const applyAstrologerLeg = async (session, earnings, promoSeconds = 0) => {
+    if (!(earnings > 0) && !(promoSeconds > 0)) return;
     const sid = session._id;
+    const inc = {};
+    if (earnings > 0) inc.walletBalance = earnings;
+    if (promoSeconds > 0) { inc.promoSecondsPending = promoSeconds; inc.promoSecondsEarnedTotal = promoSeconds; }
     await Astrologer.updateOne(
         { _id: session.astrologer, settledSessions: { $ne: sid } },
-        { $inc: { walletBalance: earnings }, ...markerPush(sid) }
+        { $inc: inc, ...markerPush(sid) }
     );
 };
 
@@ -142,6 +152,9 @@ const writeLedger = async (session, billing, balances) => {
                 amountDeducted: billing.totalCost,
                 astrologerEarnings: billing.astrologerEarnings,
                 platformFee: billing.platformFee,
+                bonusAmountUsed: billing.bonusAmount || 0,
+                cashAmountUsed: billing.cashAmount != null ? billing.cashAmount : billing.totalCost,
+                promoSeconds: billing.bonusSeconds || 0,
                 userBalanceBefore: balances ? balances.before : 0,
                 userBalanceAfter: balances ? balances.after : 0,
                 status: "SUCCESS"
@@ -149,6 +162,13 @@ const writeLedger = async (session, billing, balances) => {
         },
         { upsert: true }
     );
+    if (billing.bonusSeconds > 0) {
+        await PromoLedger.updateOne(
+            { session: session._id },
+            { $setOnInsert: { sessionType: session.type, astrologer: session.astrologer, user: session.user, seconds: billing.bonusSeconds, bonusAmount: billing.bonusAmount } },
+            { upsert: true }
+        );
+    }
 };
 
 /**
@@ -168,6 +188,13 @@ const settleSession = async (sessionId, { now = new Date() } = {}) => {
     // 1. Compute once. Later attempts reuse the stored numbers.
     if (!(session.settlement && session.settlement.computed)) {
         const b = computeBilling(session);
+        // Bonus is spent first. Only the CASH part earns the astrologer rupees (60/40); the bonus part
+        // becomes free-session seconds. With no bonus this equals the original numbers exactly.
+        const owner = await User.findById(session.user).select("walletBalance bonusBalance").lean();
+        const availableBonus = Math.min((owner && owner.bonusBalance) || 0, (owner && owner.walletBalance) || 0);
+        const split = splitCostForBonus(b.totalCost, b.billableSeconds, availableBonus);
+        b.astrologerEarnings = split.astrologerEarnings;
+        b.platformFee = split.platformFee;
         const persisted = await Session.findOneAndUpdate(
             { _id: session._id, status: STATUS.ENDING, "settlement.computed": { $ne: true } },
             {
@@ -180,8 +207,13 @@ const settleSession = async (sessionId, { now = new Date() } = {}) => {
                         perMinuteRate: b.perMinuteRate,
                         totalCost: b.totalCost,
                         astrologerEarnings: b.astrologerEarnings,
-                        platformFee: b.platformFee
+                        platformFee: b.platformFee,
+                        bonusAmount: split.bonusAmount,
+                        cashAmount: split.cashAmount,
+                        bonusSeconds: split.bonusSeconds
                     },
+                    bonusAmountUsed: split.bonusAmount,
+                    promoSeconds: split.bonusSeconds,
                     totalDurationSeconds: b.billableSeconds,
                     totalDurationMinutes: b.totalDurationMinutes,
                     duration: b.totalDurationMinutes,
@@ -203,7 +235,7 @@ const settleSession = async (sessionId, { now = new Date() } = {}) => {
     if (billing.totalCost > 0) {
         let userBalances = null;
         if (!legs.user || !legs.ledger) {
-            userBalances = await applyUserLeg(session, billing.totalCost);
+            userBalances = await applyUserLeg(session, billing.totalCost, billing.bonusAmount || 0);
             await Session.updateOne(
                 { _id: session._id },
                 {
@@ -217,8 +249,12 @@ const settleSession = async (sessionId, { now = new Date() } = {}) => {
             );
         }
         if (!legs.astrologer) {
-            await applyAstrologerLeg(session, billing.astrologerEarnings);
+            await applyAstrologerLeg(session, billing.astrologerEarnings, billing.bonusSeconds || 0);
             await Session.updateOne({ _id: session._id }, { $set: { "settlement.legs.astrologer": true } });
+        }
+        if (!legs.grants) {
+            if (billing.bonusAmount > 0) await consumeGrants(session.user, billing.bonusAmount);
+            await Session.updateOne({ _id: session._id }, { $set: { "settlement.legs.grants": true } });
         }
         if (!legs.admin) {
             await applyAdminLeg(session, billing.platformFee);

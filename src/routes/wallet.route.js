@@ -139,7 +139,9 @@ router.get("/balance", async (req, res) => {
                     walletBalance: astrologer.walletBalance || 0,
                     name: astrologer.name || "Astrologer",
                     totalEarnings,
-                    pendingPayout
+                    pendingPayout,
+                    // free-session time earned from bonus-funded sessions; deliberately seconds, never a rupee value
+                    promoSecondsPending: astrologer.promoSecondsPending || 0
                 }
             });
         }
@@ -180,12 +182,18 @@ router.post("/add", authMiddleware, adminMiddleware.requirePermission("users.wal
             return res.status(404).json({ success: false, message: "User record not found in system." });
         }
 
-        // Atomic increment so concurrent credits/debits are not lost
-        const user = await User.findByIdAndUpdate(
-            target._id,
-            { $inc: { walletBalance: numericAmount } },
-            { new: true }
-        );
+        // Admin credits are BONUS by default (spent first; astrologers earn free-session time, not rupees).
+        // Pass type:"cash" only when real money was actually received outside the gateway.
+        const creditType = req.body.type === "cash" ? "cash" : "bonus";
+        let user;
+        if (creditType === "bonus") {
+            const { grantBonus } = require("../services/bonus.service");
+            await grantBonus({ userId: target._id, amount: numericAmount, source: "admin", reason: String(req.body.reason || "Admin bonus"), createdBy: req.admin._id, paymentPrefix: "ADMINBONUS" });
+            user = await User.findById(target._id);
+        } else {
+            // Atomic increment so concurrent credits/debits are not lost
+            user = await User.findByIdAndUpdate(target._id, { $inc: { walletBalance: numericAmount } }, { new: true });
+        }
         const previousBalance = (user.walletBalance || 0) - numericAmount;
 
         console.log(`💰 Added ₹${numericAmount} to User ${user._id} (${user.phone}). New balance: ₹${user.walletBalance}`);
@@ -226,16 +234,23 @@ router.post("/update-balance", authMiddleware, adminMiddleware.requirePermission
         }
 
         const previousBalance = user.walletBalance || 0;
+        const creditType = req.body.type === "cash" ? "cash" : "bonus";
         if (action === "deduct") {
             user.walletBalance = Math.max(0, previousBalance - numericAmount);
+            user.bonusBalance = Math.min(user.bonusBalance || 0, user.walletBalance); // the bonus part can never exceed the wallet
+            await user.save();
+        } else if (creditType === "bonus") {
+            const { grantBonus } = require("../services/bonus.service");
+            await grantBonus({ userId: user._id, amount: numericAmount, source: "admin", reason: String(req.body.reason || "Admin bonus"), createdBy: req.admin._id, paymentPrefix: "ADMINBONUS" });
+            user.walletBalance = previousBalance + numericAmount;
         } else {
             user.walletBalance = previousBalance + numericAmount;
+            await user.save();
         }
 
-        await user.save();
-
-        // Create transaction history log in Payment model
+        // Create transaction history log in Payment model (bonus credits are already logged by grantBonus)
         try {
+            if (action !== "deduct" && creditType === "bonus") throw new Error("__skip__");
             const Payment = require("../models/payment.model");
             const txnId = `ADJ_${Date.now()}`;
             await Payment.create({
@@ -249,7 +264,7 @@ router.post("/update-balance", authMiddleware, adminMiddleware.requirePermission
                 paidAt: new Date()
             });
         } catch (paymentErr) {
-            console.error("Failed to log admin wallet adjustment to Payment collection:", paymentErr.message);
+            if (paymentErr.message !== "__skip__") console.error("Failed to log admin wallet adjustment to Payment collection:", paymentErr.message);
         }
 
         console.log(`💰 Admin adjusted User ${user._id} balance. Action: ${action}, Amount: ₹${numericAmount}. Previous: ₹${previousBalance}, New: ₹${user.walletBalance}`);
@@ -444,6 +459,26 @@ router.get("/transactions", async (req, res) => {
                     .lean()
             ]);
 
+            const pushFreeRow = (s, kind) => {
+                if (!(s.promoSeconds > 0)) return;
+                const clientName = s.user?.name || `${s.user?.firstname || ""} ${s.user?.lastname || ""}`.trim() || s.user?.phone || "Client";
+                const mins = Math.floor(s.promoSeconds / 60), secs = s.promoSeconds % 60;
+                txns.push({
+                    id: `free-${String(s._id)}`,
+                    transactionId: `FREE-${String(s._id).slice(-6).toUpperCase()}`,
+                    sessionCode: s.sessionCode || String(s._id),
+                    title: `Free session: ${kind} with ${clientName}`,
+                    description: `Free session time: ${mins}m ${secs}s`,
+                    paymentMethod: `Free session (${kind})`,
+                    date: formatKolkataDate(s.startTime || s.createdAt),
+                    createdAt: s.startTime || s.createdAt,
+                    amount: 0,
+                    status: "Completed",
+                    type: "free",
+                    promoSeconds: s.promoSeconds
+                });
+            };
+
             callSessions.forEach(s => {
                 if (s.astrologerEarnings > 0) {
                     const clientName = s.user?.name || `${s.user?.firstname || ""} ${s.user?.lastname || ""}`.trim() || s.user?.phone || "Client";
@@ -474,6 +509,9 @@ router.get("/transactions", async (req, res) => {
                     });
                 }
             });
+
+            callSessions.forEach((s) => pushFreeRow(s, s.callType === "VIDEO" ? "Video call" : "Audio call"));
+            chatSessions.forEach((s) => pushFreeRow(s, "Chat"));
 
             chatSessions.forEach(s => {
                 if (s.astrologerEarnings > 0) {
@@ -603,7 +641,7 @@ router.get("/transactions", async (req, res) => {
                             id: String(p._id),
                             transactionId: p.transactionId || String(p._id),
                             title: p.paymentGateway === "Admin"
-                                ? (p.transactionId && p.transactionId.startsWith("SIGNUP_") ? `Signup Reward` : (isDebit ? `Debit Adjustment by Admin` : `Reward from App`))
+                                ? (p.transactionId && p.transactionId.startsWith("SIGNUP_") ? `Signup Reward` : p.transactionId && p.transactionId.startsWith("COUPON_") ? `Coupon Reward` : (isDebit ? `Debit Adjustment by Admin` : `Reward from App`))
                                 : (p.appointment ? `Payment for appointment` : `Added Money`),
                             date: formatKolkataDate(p.paidAt || p.createdAt),
                             createdAt: p.paidAt || p.createdAt,

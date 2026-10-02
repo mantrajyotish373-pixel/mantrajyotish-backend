@@ -40,7 +40,14 @@ const MODULES = [
     { key: "reports", label: "Reports", actions: [{ key: "view", label: "View reports" }] },
     { key: "reviews", label: "Reviews", actions: [{ key: "view", label: "View reviews" }] },
     { key: "notifications", label: "Notifications", actions: [{ key: "view", label: "View notifications" }] },
-    { key: "coupons", label: "Coupons", actions: [{ key: "manage", label: "Manage coupons" }] },
+    { key: "promotions", label: "Offers & Bonus", actions: [
+        { key: "view", label: "View offers, coupons and bonus history" },
+        { key: "manage", label: "Create / edit offers, coupons and give bonus" }
+    ] },
+    { key: "promopayouts", label: "Promo payouts", actions: [
+        { key: "view", label: "View free-session time owed to astrologers" },
+        { key: "manage", label: "Mark promo payouts as paid / change the rate" }
+    ] },
     { key: "banners", label: "Banner management", actions: [{ key: "manage", label: "Manage banners" }] }
 ];
 

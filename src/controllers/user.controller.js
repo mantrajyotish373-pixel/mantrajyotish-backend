@@ -90,25 +90,17 @@ const registerUser = async (req, res, next) => {
             // Public signup always creates a regular user; roles are never client-controlled
             role: "user",
             isProfileCompleted: Boolean(name || (firstname && lastname)),
-            walletBalance: 100
+            walletBalance: 0
         });
 
-        // Log signup reward to Payment history
+        // Signup bonus is an editable promotion (Admin > Offers & Bonus); it credits wallet + bonus balance and logs history.
         try {
-            const Payment = require("../models/payment.model");
-            const txnId = `SIGNUP_${Date.now()}`;
-            await Payment.create({
-                user: user._id,
-                amount: 100,
-                currency: "INR",
-                paymentGateway: "Admin",
-                transactionId: txnId,
-                orderId: txnId,
-                paymentStatus: "success",
-                paidAt: new Date()
-            });
-        } catch (paymentErr) {
-            console.error("Failed to log signup reward to Payment collection:", paymentErr.message);
+            const { grantSignupBonus } = require("../services/bonus.service");
+            await grantSignupBonus(user._id);
+            const fresh = await User.findById(user._id);
+            if (fresh) user.walletBalance = fresh.walletBalance;
+        } catch (bonusErr) {
+            console.error("Failed to grant signup bonus:", bonusErr.message);
         }
 
         const token = generateToken({

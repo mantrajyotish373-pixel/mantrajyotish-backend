@@ -40,6 +40,7 @@ router.use("/chat", chatRoutes);
 router.use("/session", require("./session.route"));
 router.use("/wallet", walletRoutes);
 router.use("/withdraw", require("./withdraw.route"));
+router.use("/promo", require("./promo.route"));
 router.get("/settings/public", require("../controllers/settings.controller").getPublicSettings);
 router.use("/places", placesRoutes);
 router.use("/addresses", deliveryAddressRoutes);

@@ -64,6 +64,9 @@ const WalletTransactionSchema = new mongoose.Schema(
             required: true,
             min: 0
         },
+        bonusAmountUsed: { type: Number, default: 0 },
+        cashAmountUsed: { type: Number, default: 0 },
+        promoSeconds: { type: Number, default: 0 },
         userBalanceBefore: {
             type: Number,
             default: 0

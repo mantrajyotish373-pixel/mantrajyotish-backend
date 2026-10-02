@@ -277,7 +277,7 @@ const getDashboardStats = async (req, res) => {
             User.countDocuments({ role: "user" }),
             Astrologer.countDocuments(),
             Appointment.countDocuments({ createdAt: { $gte: startOfToday, $lte: endOfToday } }),
-            Payment.find({ paymentStatus: "success", createdAt: { $gte: startOfToday, $lte: endOfToday } }),
+            Payment.find({ paymentStatus: "success", paymentGateway: { $ne: "Admin" }, createdAt: { $gte: startOfToday, $lte: endOfToday } }),
             Astrologer.countDocuments({ status: "pending" }),
             Payout.countDocuments({ status: "Pending" }),
             VideoSession.countDocuments({ status: { $in: ["ACTIVE", "live"] } }),
@@ -302,7 +302,7 @@ const getDashboardStats = async (req, res) => {
             Astrologer.countDocuments({ createdAt: { $gte: monthStart } }),
             Astrologer.countDocuments({ createdAt: { $gte: lastMonthStart, $lte: lastMonthEnd } }),
             Appointment.countDocuments({ createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd } }),
-            Payment.find({ paymentStatus: "success", createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd } }),
+            Payment.find({ paymentStatus: "success", paymentGateway: { $ne: "Admin" }, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd } }),
             Astrologer.countDocuments({ status: "pending", createdAt: { $lte: yesterdayEnd } }),
             Payout.countDocuments({ status: "Pending", createdAt: { $lte: yesterdayEnd } })
         ]);
@@ -326,6 +326,7 @@ const getDashboardStats = async (req, res) => {
             const endOfDay = new Date(d.setHours(23,59,59,999));
             const dayPayments = await Payment.find({
                 paymentStatus: "success",
+                paymentGateway: { $ne: "Admin" }, // bonus/admin credits are not revenue
                 createdAt: { $gte: startOfDay, $lte: endOfDay }
             });
             const revenue = dayPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
@@ -341,6 +342,7 @@ const getDashboardStats = async (req, res) => {
             const end = new Date(startOfToday.getTime() - i * 4 * 60 * 60 * 1000);
             const periodPayments = await Payment.find({
                 paymentStatus: "success",
+                paymentGateway: { $ne: "Admin" }, // bonus/admin credits are not revenue
                 createdAt: { $gte: start, $lte: end }
             });
             const revenue = periodPayments.reduce((sum, p) => sum + (p.amount || 0), 0);
@@ -359,6 +361,7 @@ const getDashboardStats = async (req, res) => {
             const endOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
             const monthPayments = await Payment.find({
                 paymentStatus: "success",
+                paymentGateway: { $ne: "Admin" }, // bonus/admin credits are not revenue
                 createdAt: { $gte: startOfMonth, $lte: endOfMonth }
             });
             const revenue = monthPayments.reduce((sum, p) => sum + (p.amount || 0), 0);

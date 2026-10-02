@@ -79,7 +79,7 @@ const finalResult = (session, role) => {
     if (role === "USER") {
         return { ...base, walletBalanceAfter: session.settlement ? session.settlement.userBalanceAfter : null };
     }
-    return { ...base, earnings: session.astrologerEarnings || 0, platformFee: session.platformFee || 0 };
+    return { ...base, earnings: session.astrologerEarnings || 0, platformFee: session.platformFee || 0, promoSeconds: session.promoSeconds || 0 };
 };
 
 /** Legacy end payload (same shape broadcastSessionEnded used) */

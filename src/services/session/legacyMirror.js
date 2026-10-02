@@ -36,7 +36,8 @@ const mirrorNow = async (sessionDoc) => {
         totalDurationMinutes: s.totalDurationMinutes || 0,
         totalAmountDeducted: s.totalAmountDeducted || 0,
         astrologerEarnings: s.astrologerEarnings || 0,
-        platformFee: s.platformFee || 0
+        platformFee: s.platformFee || 0,
+        promoSeconds: s.promoSeconds || 0
     };
 
     if (s.type === "CHAT") {

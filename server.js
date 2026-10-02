@@ -58,6 +58,11 @@ const startServer = async () => {
         // One loop evaluating stored deadlines, no per-session timers.
         require("./src/services/session/scheduler").start();
 
+        // Bonus system: make sure the signup promotion exists and expire unspent bonus on schedule.
+        const bonusService = require("./src/services/bonus.service");
+        bonusService.ensureSignupPromotion().catch((e) => console.error("signup promotion setup failed:", e.message));
+        bonusService.startExpiryWorker(10);
+
         server.listen(PORT, () => {
             console.log(`🚀 Server Running on Port ${PORT} with Socket.io Enabled`);
         });

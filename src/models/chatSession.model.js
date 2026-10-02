@@ -67,6 +67,7 @@ const ChatSessionSchema = new mongoose.Schema(
             min: 0
         },
 
+        promoSeconds: { type: Number, default: 0 },
         platformFee: {
             type: Number,
             default: 0,

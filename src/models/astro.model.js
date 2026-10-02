@@ -183,6 +183,11 @@ const AstroSchema = new mongoose.Schema(
             min: 0
         },
 
+        // Free-session time earned from sessions the user paid with bonus money. Shown to the astrologer
+        // as time only (never as rupees); the company pays it out manually and an admin resets it to 0.
+        promoSecondsPending: { type: Number, default: 0, min: 0 },
+        promoSecondsEarnedTotal: { type: Number, default: 0, min: 0 },
+
         // Session ids whose settlement has already been applied to this wallet (idempotency marker;
         // bounded to the most recent entries by the settlement code)
         settledSessions: {

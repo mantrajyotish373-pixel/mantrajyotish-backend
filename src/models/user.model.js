@@ -181,6 +181,14 @@ const UserSchema = new mongoose.Schema(
       min: 0,
     },
 
+    // The promotional part of walletBalance (signup bonus, coupons, admin bonus). Always <= walletBalance.
+    // Spent before real cash; sessions paid from it earn the astrologer free-session seconds, not rupees.
+    bonusBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+
     // Session ids whose settlement has already been applied to this wallet (idempotency marker;
     // bounded to the most recent entries by the settlement code)
     settledSessions: {

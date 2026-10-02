@@ -71,12 +71,21 @@ const mapDuplicateKey = (err) => {
     return err;
 };
 
+/** How many seconds of this session the user's bonus balance pays for (bonus is spent first). */
+const promoCoverFor = (user, balance, perMinuteRate) => {
+    const bonus = Math.min(Number((user && user.bonusBalance) || 0), balance);
+    const ratePerSec = Number(perMinuteRate) / 60;
+    return bonus > 0 && ratePerSec > 0 ? Math.floor(bonus / ratePerSec) : 0;
+};
+
 /** Balance snapshot -> the moment the wallet can no longer pay (existing max-duration rule). */
 const billingStartFields = async (session, startedAt) => {
-    const user = await User.findById(session.user).select("walletBalance").lean();
+    const user = await User.findById(session.user).select("walletBalance bonusBalance").lean();
     const balance = Number((user && user.walletBalance) || 0);
     const maxSeconds = rules.maxBillableSeconds(balance, session.perMinuteRate);
+    const promoCoverSeconds = promoCoverFor(user, balance, session.perMinuteRate);
     return {
+        promoCoverSeconds,
         status: STATUS.ACTIVE,
         startedAt,
         startTime: startedAt,
@@ -578,7 +587,7 @@ const resumeBilling = async ({ sessionId, actor, now: nowOpt } = {}) => {
 
     const pausedMs = Math.max(0, now.getTime() - new Date(session.billingPausedAt).getTime());
     const newStart = new Date(new Date(session.startedAt).getTime() + pausedMs);
-    const user = await User.findById(session.user).select("walletBalance").lean();
+    const user = await User.findById(session.user).select("walletBalance bonusBalance").lean();
     const balance = Number((user && user.walletBalance) || 0);
 
     const resumed = await Session.findOneAndUpdate(
@@ -588,6 +597,7 @@ const resumeBilling = async ({ sessionId, actor, now: nowOpt } = {}) => {
                 startedAt: newStart,
                 startTime: newStart,
                 balanceAtStart: balance,
+                promoCoverSeconds: promoCoverFor(user, balance, session.perMinuteRate),
                 maxEndAt: addSeconds(newStart, rules.maxBillableSeconds(balance, session.perMinuteRate)),
                 billingPausedAt: null,
                 pauseDeadline: null,

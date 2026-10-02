@@ -124,12 +124,18 @@ const SessionSchema = new mongoose.Schema(
                 perMinuteRate: { type: Number, default: 0 },
                 totalCost: { type: Number, default: 0 },
                 astrologerEarnings: { type: Number, default: 0 },
-                platformFee: { type: Number, default: 0 }
+                platformFee: { type: Number, default: 0 },
+                // Split of totalCost: bonusAmount was paid from the user's bonus balance (no cash, no commission),
+                // cashAmount from real money (60/40). bonusSeconds becomes the astrologer's free-session time.
+                bonusAmount: { type: Number, default: 0 },
+                cashAmount: { type: Number, default: 0 },
+                bonusSeconds: { type: Number, default: 0 }
             },
             legs: {
                 user: { type: Boolean, default: false },
                 astrologer: { type: Boolean, default: false },
                 admin: { type: Boolean, default: false },
+                grants: { type: Boolean, default: false },
                 ledger: { type: Boolean, default: false }
             },
             userBalanceBefore: { type: Number, default: null },
@@ -204,6 +210,10 @@ const SessionSchema = new mongoose.Schema(
             min: 0
         },
 
+        // Seconds at the start of billing that the user pays from bonus money (astrologer app shows these as a free session)
+        promoCoverSeconds: { type: Number, default: 0 },
+        bonusAmountUsed: { type: Number, default: 0 },
+        promoSeconds: { type: Number, default: 0 },
         platformFee: {
             type: Number,
             default: 0,

@@ -8,6 +8,8 @@ const authMiddleware = require("../middlewares/auth.middleware");
 const adminMiddleware = require("../middlewares/admin.middleware");
 const { requirePermission, requireSuperadmin } = adminMiddleware;
 const settingsController = require("../controllers/settings.controller");
+const promotionController = require("../controllers/promotion.controller");
+const promoPayoutController = require("../controllers/promoPayout.controller");
 const { rateLimit } = require("../utils/rateLimit");
 
 const loginLimiter = rateLimit({ keyPrefix: "admin-login", windowMs: 15 * 60 * 1000, max: 10, message: "Too many login attempts. Try again in 15 minutes." });
@@ -35,6 +37,20 @@ router.delete("/sessions/:sid", authMiddleware, adminMiddleware, wrap(settingsCo
 router.get("/settings", authMiddleware, requireSuperadmin, wrap(settingsController.getPlatformSettings));
 router.put("/settings", authMiddleware, requireSuperadmin, wrap(settingsController.updatePlatformSettings));
 router.get("/system-info", authMiddleware, requireSuperadmin, wrap(settingsController.getSystemInfo));
+
+// Offers & Bonus: signup bonus, coupons, bonus history
+router.get("/promotions", authMiddleware, requirePermission("promotions.view"), wrap(promotionController.listPromotions));
+router.post("/promotions", authMiddleware, requirePermission("promotions.manage"), wrap(promotionController.createPromotion));
+router.put("/promotions/:id", authMiddleware, requirePermission("promotions.manage"), wrap(promotionController.updatePromotion));
+router.delete("/promotions/:id", authMiddleware, requirePermission("promotions.manage"), wrap(promotionController.deletePromotion));
+router.get("/promotions/:id/grants", authMiddleware, requirePermission("promotions.view"), wrap(promotionController.listGrants));
+router.post("/bonus-grants", authMiddleware, requirePermission("promotions.manage"), wrap(promotionController.grantManual));
+
+// Promo payouts: free-session time owed to astrologers
+router.get("/promo-payouts", authMiddleware, requirePermission("promopayouts.view"), wrap(promoPayoutController.overview));
+router.get("/promo-payouts/history", authMiddleware, requirePermission("promopayouts.view"), wrap(promoPayoutController.history));
+router.put("/promo-payouts/rate", authMiddleware, requirePermission("promopayouts.manage"), wrap(promoPayoutController.setRate));
+router.post("/promo-payouts/:astrologerId/pay", authMiddleware, requirePermission("promopayouts.manage"), wrap(promoPayoutController.markPaid));
 
 // Dashboard (revenue figures are stripped unless the admin has dashboard.financials)
 router.get("/dashboard-stats", authMiddleware, requirePermission("dashboard.view"), adminController.getDashboardStats);
