@@ -288,8 +288,9 @@ router.post("/withdraw", authMiddleware, async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid withdrawal amount. Must be a positive number." });
         }
 
-        if (numericAmount < 100) {
-            return res.status(400).json({ success: false, message: "Minimum withdrawal amount is ₹100." });
+        const minWithdrawal = (await require("../services/settings.service").getSettings()).minWithdrawal || 100;
+        if (numericAmount < minWithdrawal) {
+            return res.status(400).json({ success: false, message: `Minimum withdrawal amount is ₹${minWithdrawal}.` });
         }
 
         const Astrologer = require("../models/astro.model");

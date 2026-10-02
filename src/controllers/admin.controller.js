@@ -14,7 +14,7 @@ const adminMiddleware = require("../middlewares/admin.middleware");
 const loginAdmin = async (req, res, next) => {
     try {
         const { email, password } = req.body;
-        const result = await adminService.loginAdmin(email, password, req.headers["user-agent"]);
+        const result = await adminService.loginAdmin(email, password, req.headers["user-agent"], require("../utils/rateLimit").clientIp(req));
         logAudit(req, result.admin, { action: "auth.login", module: "auth", statusCode: 200, summary: "Logged in" });
 
         return res.status(200).json({

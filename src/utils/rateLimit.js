@@ -31,4 +31,4 @@ setInterval(() => {
     for (const [key, entry] of buckets) if (entry.resetAt <= now) buckets.delete(key);
 }, 10 * 60 * 1000).unref();
 
-module.exports = { rateLimit };
+module.exports = { rateLimit, clientIp };

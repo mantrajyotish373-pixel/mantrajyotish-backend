@@ -48,6 +48,7 @@ app.get("/", (req, res) => {
 });
 
 // API Routes
+app.use(require("./middlewares/maintenance.middleware"));
 app.use("/api", routes);
 
 // 404 Handler

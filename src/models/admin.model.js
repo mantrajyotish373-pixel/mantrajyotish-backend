@@ -31,12 +31,18 @@ const AdminSchema = new mongoose.Schema(
                     expiresAt: { type: Date, required: true },
                     createdAt: { type: Date, default: Date.now },
                     userAgent: { type: String, default: "" },
+                    sid: { type: String, default: "" },
+                    ip: { type: String, default: "" },
+                    lastUsedAt: { type: Date, default: Date.now },
                     _id: false
                 }
             ],
             default: [],
             select: false
         },
+
+        phone: { type: String, default: "", trim: true },
+        passwordChangedAt: { type: Date, default: null },
 
         lastLoginAt: {
             type: Date,
