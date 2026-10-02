@@ -3,6 +3,7 @@ const router = express.Router();
 const videoSessionController = require("../controllers/videoSession.controller");
 const authMiddleware = require("../middlewares/auth.middleware");
 const adminMiddleware = require("../middlewares/admin.middleware");
+const { requirePermission } = adminMiddleware;
 const sessionAuthMiddleware = require("../middlewares/sessionAuth.middleware");
 const { bindUserIdentity, bindAstrologerIdentity, scopeToCaller } = require("../middlewares/callerScope.middleware");
 
@@ -29,12 +30,12 @@ router.post("/rate/:id", sessionAuthMiddleware, videoSessionController.rateVideo
 router.get("/history", scopeToCaller, videoSessionController.getCallHistory);
 
 // Legacy Scheduled Video Session Endpoints (admin tooling)
-router.post("/create", adminMiddleware, videoSessionController.createVideoSession);
+router.post("/create", requirePermission("bookings.manage"), videoSessionController.createVideoSession);
 router.post("/start", sessionAuthMiddleware, videoSessionController.startVideoSession);
 router.post("/start/:id", sessionAuthMiddleware, videoSessionController.startVideoSession);
-router.get("/all", adminMiddleware, videoSessionController.getAllVideoSessions);
+router.get("/all", requirePermission("calls.view"), videoSessionController.getAllVideoSessions);
 router.get("/:id", sessionAuthMiddleware, videoSessionController.getVideoSessionById);
-router.put("/update/:id", adminMiddleware, videoSessionController.updateVideoSession);
-router.delete("/delete/:id", adminMiddleware, videoSessionController.deleteVideoSession);
+router.put("/update/:id", requirePermission("bookings.manage"), videoSessionController.updateVideoSession);
+router.delete("/delete/:id", requirePermission("bookings.manage"), videoSessionController.deleteVideoSession);
 
 module.exports = router;

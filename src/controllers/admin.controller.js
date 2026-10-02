@@ -7,39 +7,15 @@ const VideoSession = require("../models/videoSession.model");
 const ChatSession = require("../models/chatSession.model");
 
 const adminService = require("../services/admin.service");
-
-// 1. REGISTER / CREATE ADMIN
-const registerAdmin = async (req, res, next) => {
-    try {
-        const requestedRole = req.body.role || "admin";
-        if (!["admin", "superadmin"].includes(requestedRole)) {
-            return res.status(400).json({ success: false, message: "Invalid admin role" });
-        }
-        if (requestedRole === "superadmin" && req.user.role !== "superadmin") {
-            return res.status(403).json({ success: false, message: "Only a superadmin can create another superadmin" });
-        }
-
-        const result = await adminService.createAdmin({ ...req.body, role: requestedRole });
-
-        return res.status(201).json({
-            success: true,
-            message: "Admin account registered successfully",
-            data: result
-        });
-
-    } catch (error) {
-        return res.status(400).json({
-            success: false,
-            message: error.message
-        });
-    }
-};
+const { logAudit } = require("../utils/audit");
+const adminMiddleware = require("../middlewares/admin.middleware");
 
 // 2. LOGIN ADMIN
 const loginAdmin = async (req, res, next) => {
     try {
         const { email, password } = req.body;
         const result = await adminService.loginAdmin(email, password, req.headers["user-agent"]);
+        logAudit(req, result.admin, { action: "auth.login", module: "auth", statusCode: 200, summary: "Logged in" });
 
         return res.status(200).json({
             success: true,
@@ -48,6 +24,10 @@ const loginAdmin = async (req, res, next) => {
         });
 
     } catch (error) {
+        logAudit(req, null, {
+            action: "auth.login_failed", module: "auth", statusCode: 401,
+            summary: "Failed admin login", details: { email: String(req.body?.email || "").slice(0, 120) }
+        });
         return res.status(401).json({
             success: false,
             message: error.message
@@ -224,6 +204,23 @@ const deleteAstrologer = async (req, res) => {
 
 // 4. GET DASHBOARD STATISTICS (AGGREGATED REAL DATA)
 const getDashboardStats = async (req, res) => {
+    // Money figures are only shown to admins holding "dashboard.financials".
+    if (!adminMiddleware.hasPermission(req.admin, "dashboard.financials")) {
+        const sendJson = res.json.bind(res);
+        res.json = (body) => {
+            if (body && body.data) {
+                body.data.todayRevenue = null;
+                body.data.revenueChart = null;
+                if (body.data.trends) delete body.data.trends.revenue;
+                if (body.data.trendsIsPositive) delete body.data.trendsIsPositive.revenue;
+                if (Array.isArray(body.data.recentActivities)) {
+                    body.data.recentActivities = body.data.recentActivities.map((a) =>
+                        a && typeof a.text === "string" ? { ...a, text: a.text.replace(/₹\s?[\d.,]+/g, "an amount") } : a);
+                }
+            }
+            return sendJson(body);
+        };
+    }
     try {
         const startOfToday = new Date();
         startOfToday.setHours(0, 0, 0, 0);
@@ -463,7 +460,6 @@ const getDashboardStats = async (req, res) => {
 
 module.exports = {
     getDashboardStats,
-    registerAdmin,
     loginAdmin,
     refreshSession,
     logoutAdmin,

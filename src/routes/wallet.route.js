@@ -162,7 +162,7 @@ router.get("/balance", async (req, res) => {
  * Adds funds to user's wallet balance in MongoDB.
  * Body: { amount: Number, userId?: String, phone?: String }
  */
-router.post("/add", authMiddleware, adminMiddleware, async (req, res) => {
+router.post("/add", authMiddleware, adminMiddleware.requirePermission("users.wallet"), async (req, res) => {
     try {
         // Admin-only manual credit. Customer top-ups must go through Razorpay
         // (/api/razorpay/order + /verify), which credits the wallet after payment.
@@ -211,7 +211,7 @@ router.post("/add", authMiddleware, adminMiddleware, async (req, res) => {
  * Admins use this to directly adjust a user's wallet balance.
  * Body: { userId: String, amount: Number, action: 'add'|'deduct' }
  */
-router.post("/update-balance", authMiddleware, adminMiddleware, async (req, res) => {
+router.post("/update-balance", authMiddleware, adminMiddleware.requirePermission("users.wallet"), async (req, res) => {
     try {
         const { userId, amount, action } = req.body;
         const numericAmount = parseFloat(amount);
@@ -656,13 +656,13 @@ router.get("/transactions", async (req, res) => {
  * GET /api/wallet/admin/profit
  * Returns company profit (admin wallet balance and platform fee summary)
  */
-router.get("/admin/profit", authMiddleware, adminMiddleware, async (req, res) => {
+router.get("/admin/profit", authMiddleware, adminMiddleware.requirePermission("finance.view"), async (req, res) => {
     try {
         const Admin = require("../models/admin.model");
         const VideoSession = require("../models/videoSession.model");
         const ChatSession = require("../models/chatSession.model");
 
-        const admin = await Admin.findOne();
+        const admin = await Admin.findOne({ role: "superadmin" }).sort({ createdAt: 1 });
         
         const [calls, chats] = await Promise.all([
             VideoSession.find({ status: "COMPLETED" }),

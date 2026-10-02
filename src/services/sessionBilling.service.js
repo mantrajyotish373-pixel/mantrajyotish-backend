@@ -130,7 +130,7 @@ const settleWalletBalance = async ({
         // 5. Atomically credit admin platform fee (40%)
         if (platformFee > 0) {
             await Admin.findOneAndUpdate(
-                {},
+                { role: "superadmin" },
                 { $inc: { walletBalance: platformFee } },
                 { upsert: true }
             );

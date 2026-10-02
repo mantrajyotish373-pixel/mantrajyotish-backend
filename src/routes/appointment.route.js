@@ -5,6 +5,7 @@ const router = express.Router();
 const appointmentController = require("../controllers/appointment.controller");
 const authMiddleware = require("../middlewares/auth.middleware");
 const adminMiddleware = require("../middlewares/admin.middleware");
+const { requirePermission } = adminMiddleware;
 
 router.post(
     "/create",
@@ -15,28 +16,28 @@ router.post(
 router.get(
     "/all",
     authMiddleware,
-    adminMiddleware,
+    requirePermission("bookings.view"),
     appointmentController.getAllAppointments
 );
 
 router.get(
     "/:id",
     authMiddleware,
-    adminMiddleware,
+    requirePermission("bookings.view"),
     appointmentController.getAppointmentById
 );
 
 router.put(
     "/update/:id",
     authMiddleware,
-    adminMiddleware,
+    requirePermission("bookings.manage"),
     appointmentController.updateAppointment
 );
 
 router.delete(
     "/delete/:id",
     authMiddleware,
-    adminMiddleware,
+    requirePermission("bookings.manage"),
     appointmentController.deleteAppointment
 );
 

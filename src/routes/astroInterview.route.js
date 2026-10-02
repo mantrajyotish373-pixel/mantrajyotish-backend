@@ -6,7 +6,9 @@ const astroInterviewController = require("../controllers/astroInterview.controll
 const authMiddleware = require("../middlewares/auth.middleware");
 const adminMiddleware = require("../middlewares/admin.middleware");
 
-const adminOnly = [authMiddleware, adminMiddleware];
+const { requirePermission } = adminMiddleware;
+const viewAdmin = [authMiddleware, requirePermission("interviews.view")];
+const adminOnly = [authMiddleware, requirePermission("interviews.manage")];
 
 // 1. Astrologer Requests Interview
 router.post("/request", authMiddleware, astroInterviewController.requestInterview);
@@ -42,8 +44,8 @@ router.put("/notes", adminOnly, astroInterviewController.updateNotes);
 router.post("/notes", adminOnly, astroInterviewController.updateNotes);
 
 // 4. Listing & Filtering (Admin)
-router.get("/all", adminOnly, astroInterviewController.getAllInterviews);
-router.get("/pending", adminOnly, astroInterviewController.getPendingInterviews);
+router.get("/all", viewAdmin, astroInterviewController.getAllInterviews);
+router.get("/pending", viewAdmin, astroInterviewController.getPendingInterviews);
 
 // 5. Astrologer Fetch Interview Details (Date, Time, Meeting Link, Notes)
 router.get("/details", authMiddleware, astroInterviewController.getMyInterview);

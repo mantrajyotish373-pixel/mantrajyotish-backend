@@ -110,7 +110,7 @@ let adminCounter = 0;
 const createAdmin = async (overrides = {}) => {
     const Admin = require("../../src/models/admin.model");
     adminCounter += 1;
-    return Admin.create({ name: "Admin", email: `admin${adminCounter}@test.dev`, password: "x", walletBalance: 0, ...overrides });
+    return Admin.create({ name: "Admin", email: `admin${adminCounter}@test.dev`, password: "x", role: "superadmin", walletBalance: 0, ...overrides });
 };
 
 /** Engine actors, shaped like the decoded JWT the REST/socket layers pass in. */

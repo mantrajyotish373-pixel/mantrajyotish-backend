@@ -95,10 +95,13 @@ const applyAstrologerLeg = async (session, earnings) => {
     );
 };
 
+// The platform wallet always lives on the (oldest) superadmin, never on a sub-admin.
+const PLATFORM_FILTER = { role: "superadmin" };
+
 const applyAdminLeg = async (session, platformFee) => {
     if (!(platformFee > 0)) return;
     const sid = session._id;
-    const admin = await Admin.findOne().select("_id").lean();
+    const admin = await Admin.findOne(PLATFORM_FILTER).sort({ createdAt: 1 }).select("_id").lean();
     if (admin) {
         await Admin.updateOne(
             { _id: admin._id, settledSessions: { $ne: sid } },
@@ -109,10 +112,10 @@ const applyAdminLeg = async (session, platformFee) => {
     // No admin yet: the legacy code created one via upsert. Keep that, retrying once on the
     // unique-email race between two first-ever settlements.
     try {
-        await Admin.findOneAndUpdate({}, { $inc: { walletBalance: platformFee }, ...markerPush(sid) }, { upsert: true });
+        await Admin.findOneAndUpdate(PLATFORM_FILTER, { $inc: { walletBalance: platformFee }, ...markerPush(sid) }, { upsert: true });
     } catch (err) {
         if (err.code !== 11000) throw err;
-        const created = await Admin.findOne().select("_id").lean();
+        const created = await Admin.findOne(PLATFORM_FILTER).sort({ createdAt: 1 }).select("_id").lean();
         if (created) {
             await Admin.updateOne(
                 { _id: created._id, settledSessions: { $ne: sid } },

@@ -36,7 +36,7 @@ after(async () => {
 });
 
 test("admin login issues access + refresh token, refresh works, logout revokes it", async () => {
-    await Admin.create({ name: "A", email: "a@x.com", password: await bcrypt.hash("password123", 10), role: "admin" });
+    await Admin.create({ name: "A", email: "a@x.com", password: await bcrypt.hash("password123", 10), role: "superadmin" });
 
     const login = await call("/admin/login", { method: "POST", body: { email: "a@x.com", password: "password123" } });
     assert.equal(login.status, 200);

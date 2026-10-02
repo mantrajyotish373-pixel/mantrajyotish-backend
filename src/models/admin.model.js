@@ -42,6 +42,13 @@ const AdminSchema = new mongoose.Schema(
             type: Date,
             default: null
         },
+        // Sub-admin access control. Superadmin ignores `permissions` (implicitly has everything).
+        permissions: { type: [String], default: [] },
+        roleId: { type: mongoose.Schema.Types.ObjectId, ref: "Role", default: null },
+        roleName: { type: String, default: "" },
+        status: { type: String, enum: ["active", "disabled"], default: "active" },
+        createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
+
         walletBalance: {
             type: Number,
             default: 0

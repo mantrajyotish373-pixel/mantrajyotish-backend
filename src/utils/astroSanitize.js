@@ -3,12 +3,20 @@ const { verifyToken } = require("./jwt");
 const isAdminRole = (role) => role === "admin" || role === "superadmin";
 
 // Attaches req.authUser when a valid Bearer token is present; never rejects the request.
-const optionalAuth = (req, res, next) => {
+const optionalAuth = async (req, res, next) => {
     try {
         const h = req.headers.authorization;
         if (h && h.startsWith("Bearer ")) {
             const d = verifyToken(h.split(" ")[1]);
             req.authUser = { ...d, userId: d.userId || d.id || d._id };
+            if (isAdminRole(d.role)) {
+                // Full astrologer details only for an active admin who may see astrologer data.
+                const Admin = require("../models/admin.model");
+                const a = await Admin.findById(req.authUser.userId).select("role permissions status").lean();
+                const ok = a && a.status !== "disabled" && (a.role === "superadmin" ||
+                    ["astrologers.view", "kyc.view", "interviews.view"].some((p) => (a.permissions || []).includes(p)));
+                if (!ok) req.authUser.role = "none";
+            }
         }
     } catch (e) {}
     next();
