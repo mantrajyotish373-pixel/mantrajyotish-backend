@@ -49,7 +49,7 @@ router.put("/astrologers/:id", authMiddleware, requirePermission("astrologers.ed
 router.delete("/astrologers/:id", authMiddleware, requirePermission("astrologers.delete"), adminController.deleteAstrologer);
 
 // Super admin only: team, roles, permissions catalog, audit log
-router.get("/permissions", authMiddleware, adminMiddleware, teamController.getPermissionCatalog);
+router.get("/permissions", authMiddleware, requireSuperadmin, teamController.getPermissionCatalog);
 
 router.get("/roles", authMiddleware, requireSuperadmin, wrap(teamController.listRoles));
 router.post("/roles", authMiddleware, requireSuperadmin, wrap(teamController.createRole));

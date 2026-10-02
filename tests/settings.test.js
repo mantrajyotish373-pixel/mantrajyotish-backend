@@ -79,6 +79,7 @@ test("platform settings: superadmin only, validated, audited, shown publicly", a
     assert.equal((await call("/api/admin/settings", { token: sub })).status, 403);
     assert.equal((await call("/api/admin/settings", { method: "PUT", token: sub, body: { minWithdrawal: 500 } })).status, 403);
     assert.equal((await call("/api/admin/system-info", { token: sub })).status, 403);
+    assert.equal((await call("/api/admin/permissions", { token: sub })).status, 403); // sub-admins cannot see the feature/permission list
 
     assert.equal((await call("/api/admin/settings", { method: "PUT", token: su, body: { minWithdrawal: 50 } })).status, 400);
     assert.equal((await call("/api/admin/settings", { method: "PUT", token: su, body: { supportEmail: "nope" } })).status, 400);
