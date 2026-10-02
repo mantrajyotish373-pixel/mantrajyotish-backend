@@ -193,7 +193,7 @@ const deleteMember = async (req, res) => {
 // ---------- Audit log ----------
 const listAuditLogs = async (req, res) => {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 200);
     const filter = {};
     if (req.query.actorId && validId(req.query.actorId)) filter.actorId = req.query.actorId;
     if (req.query.module) filter.module = String(req.query.module);
