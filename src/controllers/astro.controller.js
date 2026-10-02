@@ -196,10 +196,13 @@ const createAstrologer = async (req, res, next) => {
     }
 };
 
+const { sanitizeAstrologers, isAdminRole } = require("../utils/astroSanitize");
+
 const getAllAstrologers = async (req, res, next) => {
     try {
         const filter = {};
-        if (req.query.status) {
+        // Only admins may list pending/rejected astrologers; everyone else sees approved ones.
+        if (req.query.status && req.authUser && isAdminRole(req.authUser.role)) {
             filter.status = req.query.status;
         }
         if (req.query.online === "true" || req.query.isOnline === "true") {
@@ -218,7 +221,7 @@ const getAllAstrologers = async (req, res, next) => {
             success: true,
             count: astrologers.length,
             page: page || 1,
-            data: astrologers
+            data: sanitizeAstrologers(astrologers, req)
         });
 
     } catch (error) {
@@ -248,7 +251,7 @@ const getOnlineAstrologers = async (req, res, next) => {
         return res.status(200).json({
             success: true,
             count: astrologers.length,
-            data: astrologers
+            data: sanitizeAstrologers(astrologers, req)
         });
 
     } catch (error) {
@@ -262,7 +265,7 @@ const getAstrologerById = async (req, res, next) => {
 
         return res.status(200).json({
             success: true,
-            data: astrologer
+            data: sanitizeAstrologers(astrologer, req)
         });
 
     } catch (error) {

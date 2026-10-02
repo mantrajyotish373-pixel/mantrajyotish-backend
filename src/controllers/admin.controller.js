@@ -39,7 +39,7 @@ const registerAdmin = async (req, res, next) => {
 const loginAdmin = async (req, res, next) => {
     try {
         const { email, password } = req.body;
-        const result = await adminService.loginAdmin(email, password);
+        const result = await adminService.loginAdmin(email, password, req.headers["user-agent"]);
 
         return res.status(200).json({
             success: true,
@@ -53,6 +53,23 @@ const loginAdmin = async (req, res, next) => {
             message: error.message
         });
     }
+};
+
+// 2b. REFRESH / LOGOUT SESSION
+const refreshSession = async (req, res) => {
+    try {
+        const result = await adminService.refreshAdminSession(req.body.refreshToken);
+        return res.status(200).json({ success: true, data: result });
+    } catch (error) {
+        return res.status(401).json({ success: false, message: error.message });
+    }
+};
+
+const logoutAdmin = async (req, res) => {
+    try {
+        await adminService.logoutAdmin(req.body.refreshToken);
+    } catch (e) {}
+    return res.status(200).json({ success: true, message: "Logged out" });
 };
 
 // 3. GET LOGGED-IN ADMIN PROFILE
@@ -448,6 +465,8 @@ module.exports = {
     getDashboardStats,
     registerAdmin,
     loginAdmin,
+    refreshSession,
+    logoutAdmin,
     getProfile,
     getAstrologers,
     getAstrologerById,

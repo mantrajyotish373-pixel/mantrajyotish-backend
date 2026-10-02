@@ -4,6 +4,10 @@ const router = express.Router();
 
 const paymentController = require("../controllers/payment.controller");
 const authMiddleware = require("../middlewares/auth.middleware");
+const adminMiddleware = require("../middlewares/admin.middleware");
+
+// Payment records are admin-only; clients pay through /api/razorpay.
+router.use(authMiddleware, adminMiddleware);
 
 router.post(
     "/create",

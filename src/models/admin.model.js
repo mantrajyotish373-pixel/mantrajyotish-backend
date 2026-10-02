@@ -23,6 +23,21 @@ const AdminSchema = new mongoose.Schema(
             enum: ["admin", "superadmin"],
             default: "admin"
         },
+        // Hashed, revocable refresh sessions (max 5 devices). Never returned by queries by default.
+        refreshSessions: {
+            type: [
+                {
+                    hash: { type: String, required: true },
+                    expiresAt: { type: Date, required: true },
+                    createdAt: { type: Date, default: Date.now },
+                    userAgent: { type: String, default: "" },
+                    _id: false
+                }
+            ],
+            default: [],
+            select: false
+        },
+
         lastLoginAt: {
             type: Date,
             default: null

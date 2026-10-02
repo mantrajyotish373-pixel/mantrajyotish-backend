@@ -5,14 +5,15 @@ const router = express.Router();
 const astroController = require("../controllers/astro.controller");
 const authMiddleware = require("../middlewares/auth.middleware");
 const adminMiddleware = require("../middlewares/admin.middleware");
+const { optionalAuth } = require("../utils/astroSanitize");
 const { requireSelfAstrologer } = require("../middlewares/callerScope.middleware");
 
 // Profile & Creation
 router.post("/create", astroController.createAstrologer);
 
 // Listing & Filtering
-router.get("/all", astroController.getAllAstrologers);
-router.get("/online", astroController.getOnlineAstrologers);
+router.get("/all", optionalAuth, astroController.getAllAstrologers);
+router.get("/online", optionalAuth, astroController.getOnlineAstrologers);
 
 // Admin Approval & Pending Requests (Supports both URL param :id and Body JSON { "astrologerId": "..." } / { "email": "..." })
 router.get("/pending", authMiddleware, adminMiddleware, astroController.getPendingAstrologers);
@@ -29,7 +30,7 @@ router.put("/toggle-online/:id", authMiddleware, requireSelfAstrologer, astroCon
 
 // Details by ID
 router.get("/reviews/:id", astroController.getAstrologerReviews);
-router.get("/:id", astroController.getAstrologerById);
+router.get("/:id", optionalAuth, astroController.getAstrologerById);
 
 // Update & Delete
 router.put("/update/:id", authMiddleware, requireSelfAstrologer, astroController.updateAstrologer);
