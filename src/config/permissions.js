@@ -48,7 +48,10 @@ const MODULES = [
         { key: "view", label: "View free-session time owed to astrologers" },
         { key: "manage", label: "Mark promo payouts as paid / change the rate" }
     ] },
-    { key: "banners", label: "Banner management", actions: [{ key: "manage", label: "Manage banners" }] },
+    { key: "banners", label: "Banner management", actions: [
+        { key: "view", label: "View app banners" },
+        { key: "manage", label: "Add / edit / remove app banners and upload images" }
+    ] },
     { key: "store", label: "Astro Store", actions: [
         { key: "view", label: "View store products" },
         { key: "manage", label: "Add / edit / remove products, set price and images" }

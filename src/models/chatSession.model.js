@@ -105,4 +105,7 @@ ChatSessionSchema.pre("save", function () {
     }
 });
 
+// Speeds up an astrologer's paged reviews (rated sessions, newest first)
+ChatSessionSchema.index({ astrologer: 1, rating: 1, createdAt: -1 });
+
 module.exports = mongoose.model("ChatSession", ChatSessionSchema);

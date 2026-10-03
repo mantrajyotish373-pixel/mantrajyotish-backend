@@ -15,10 +15,27 @@ const supportAdmin = require("../controllers/supportAdmin.controller");
 const paymentLogsController = require("../controllers/paymentLogs.controller");
 const addMoneyController = require("../controllers/addMoneyConfig.controller");
 const catalogController = require("../controllers/catalog.controller");
+const bannerController = require("../controllers/banner.controller");
+const multer = require("multer");
 const { rateLimit } = require("../utils/rateLimit");
 
 const loginLimiter = rateLimit({ keyPrefix: "admin-login", windowMs: 15 * 60 * 1000, max: 10, message: "Too many login attempts. Try again in 15 minutes." });
 const refreshLimiter = rateLimit({ keyPrefix: "admin-refresh", windowMs: 15 * 60 * 1000, max: 120 });
+
+// Banner images: JPG / JPEG / PNG / WebP up to 5 MB, held in memory and converted to WebP by the banner service
+const bannerUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    fileFilter: (req, file, cb) => {
+        if (["image/jpeg", "image/png", "image/webp"].includes(String(file.mimetype).toLowerCase())) return cb(null, true);
+        return cb(Object.assign(new Error("Upload a JPG, JPEG, PNG or WebP image"), { status: 400 }));
+    }
+}).single("image");
+const acceptBannerImage = (req, res, next) => bannerUpload(req, res, (err) => {
+    if (!err) return next();
+    const message = err.code === "LIMIT_FILE_SIZE" ? "Image is too large (max 5 MB)" : err.message;
+    return res.status(err.status || 400).json({ success: false, message });
+});
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
@@ -66,6 +83,12 @@ router.post("/payments/:id/recheck", authMiddleware, requirePermission("payments
 // Add Money screen settings: quick amounts, extra bonus, limits
 router.get("/add-money-settings", authMiddleware, requirePermission("addmoney.view"), wrap(addMoneyController.adminGet));
 router.put("/add-money-settings", authMiddleware, requirePermission("addmoney.manage"), wrap(addMoneyController.adminUpdate));
+
+// App banners
+router.get("/banners", authMiddleware, requirePermission("banners.view"), wrap(bannerController.list));
+router.post("/banners", authMiddleware, requirePermission("banners.manage"), acceptBannerImage, wrap(bannerController.create));
+router.put("/banners/:id", authMiddleware, requirePermission("banners.manage"), acceptBannerImage, wrap(bannerController.update));
+router.delete("/banners/:id", authMiddleware, requirePermission("banners.manage"), wrap(bannerController.remove));
 
 // Payment-page coupons (discounts on wallet top-ups)
 router.get("/coupons", authMiddleware, requirePermission("promotions.view"), wrap(couponController.list));

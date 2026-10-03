@@ -516,31 +516,39 @@ const getAstrologerReviews = async (req, res, next) => {
         if (!astrologerId) {
             return res.status(400).json({ success: false, message: "Astrologer ID is required." });
         }
+        const mongoose = require("mongoose");
+        if (!mongoose.Types.ObjectId.isValid(astrologerId)) {
+            return res.status(400).json({ success: false, message: "Invalid astrologer ID." });
+        }
 
         const ChatSession = require("../models/chatSession.model");
         const VideoSession = require("../models/videoSession.model");
 
-        // Fetch rated chat sessions
-        const chatReviews = await ChatSession.find({
-            astrologer: astrologerId,
-            rating: { $ne: null }
-        })
-        .populate("user", "name firstname lastname profileImage avatar")
-        .lean();
+        // ?page=1&limit=10 pages the list. Without ?limit the older apps still get everything (capped at 500 so it can never run away).
+        const paged = req.query.limit !== undefined;
+        const limit = paged ? Math.min(Math.max(parseInt(req.query.limit, 10) || 10, 1), 50) : 500;
+        const page = paged ? Math.max(parseInt(req.query.page, 10) || 1, 1) : 1;
+        const need = page * limit; // enough from each source to build this page after merging
 
-        // Fetch rated call sessions
-        const callReviews = await VideoSession.find({
-            astrologer: astrologerId,
-            rating: { $ne: null }
-        })
-        .populate("user", "name firstname lastname profileImage avatar")
-        .lean();
+        const match = { astrologer: new mongoose.Types.ObjectId(astrologerId), rating: { $ne: null } };
+        const summary = [{ $match: match }, { $group: { _id: null, sum: { $sum: "$rating" }, n: { $sum: 1 } } }];
+        const userFields = "name firstname lastname profileImage avatar";
 
-        // Merge and format reviews
+        const [chatReviews, callReviews, chatSum, callSum] = await Promise.all([
+            ChatSession.find(match).sort({ createdAt: -1 }).limit(need).populate("user", userFields).lean(),
+            VideoSession.find(match).sort({ createdAt: -1 }).limit(need).populate("user", userFields).lean(),
+            ChatSession.aggregate(summary),
+            VideoSession.aggregate(summary)
+        ]);
+
+        const total = (chatSum[0]?.n || 0) + (callSum[0]?.n || 0);
+        const ratingSum = (chatSum[0]?.sum || 0) + (callSum[0]?.sum || 0);
+
+        const userName = (u) => u?.name || `${u?.firstname || ""} ${u?.lastname || ""}`.trim() || "User Client";
         const formattedReviews = [
             ...chatReviews.map(r => ({
                 id: r._id,
-                name: r.user?.name || `${r.user?.firstname || ""} ${r.user?.lastname || ""}`.trim() || "User Client",
+                name: userName(r.user),
                 rating: r.rating,
                 comment: r.review || "No comment left.",
                 type: "Chat",
@@ -548,7 +556,7 @@ const getAstrologerReviews = async (req, res, next) => {
             })),
             ...callReviews.map(r => ({
                 id: r._id,
-                name: r.user?.name || `${r.user?.firstname || ""} ${r.user?.lastname || ""}`.trim() || "User Client",
+                name: userName(r.user),
                 rating: r.rating,
                 comment: r.review || "No comment left.",
                 type: r.callType || "Call",
@@ -556,16 +564,36 @@ const getAstrologerReviews = async (req, res, next) => {
             }))
         ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+        const data = formattedReviews.slice((page - 1) * limit, page * limit);
+
         return res.status(200).json({
             success: true,
-            data: formattedReviews
+            data,
+            total,
+            avgRating: total ? Number((ratingSum / total).toFixed(1)) : 0,
+            page,
+            limit,
+            hasMore: page * limit < total
         });
     } catch (error) {
         next(error);
     }
 };
 
+const getAstrologerStats = async (req, res, next) => {
+    try {
+        const mongoose = require("mongoose");
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ success: false, message: "Invalid astrologer ID." });
+        }
+        return res.status(200).json({ success: true, data: await astroService.getAstrologerStats(req.params.id) });
+    } catch (error) {
+        next(error);
+    }
+};
+
 module.exports = {
+    getAstrologerStats,
     createAstrologer,
     getAllAstrologers,
     getPendingAstrologers,

@@ -8,6 +8,10 @@ const SettingSchema = new mongoose.Schema(
         maintenanceMessage: { type: String, default: "We are upgrading the app. Please try again shortly.", maxlength: 200 },
         supportEmail: { type: String, default: "", trim: true, maxlength: 120 },
         supportPhone: { type: String, default: "", trim: true, maxlength: 30 },
+        // Shown in the user app's Settings > About & legal
+        termsUrl: { type: String, default: "", trim: true, maxlength: 300 },
+        privacyPolicyUrl: { type: String, default: "", trim: true, maxlength: 300 },
+        aboutText: { type: String, default: "", trim: true, maxlength: 500 },
         // Rupees the company pays an astrologer per minute of free-session (bonus-funded) time. Edited from Promo Payouts.
         promoPayoutPerMinute: { type: Number, default: 2.5, min: 0, max: 1000 },
         minWithdrawal: { type: Number, default: 100, min: 100, max: 100000 },

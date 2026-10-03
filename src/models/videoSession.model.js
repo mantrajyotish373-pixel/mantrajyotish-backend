@@ -169,4 +169,7 @@ VideoSessionSchema.pre("save", function () {
     }
 });
 
+// Speeds up an astrologer's paged reviews (rated sessions, newest first)
+VideoSessionSchema.index({ astrologer: 1, rating: 1, createdAt: -1 });
+
 module.exports = mongoose.model("VideoSession", VideoSessionSchema);

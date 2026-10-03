@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Astrologer = require("../models/astro.model");
 const AstroInterview = require("../models/astroInterview.model");
 const User = require("../models/user.model");
@@ -97,6 +98,18 @@ const enrichAstrologersWithStats = async (astrologersList) => {
     }));
 };
 
+// Completed consultations (with billed time) per astrologer, for many astrologers in ONE query.
+// Same definition the profile's stats use, so the number on a list card matches the profile.
+const completedOrdersFor = async (astroIds) => {
+    if (!astroIds.length) return new Map();
+    const Session = require("../models/session.model");
+    const rows = await Session.aggregate([
+        { $match: { astrologer: { $in: astroIds }, status: "COMPLETED", totalDurationSeconds: { $gt: 0 } } },
+        { $group: { _id: "$astrologer", n: { $sum: 1 } } }
+    ]);
+    return new Map(rows.map((r) => [String(r._id), r.n]));
+};
+
 const getAllAstrologers = async (filter = {}, page = null, limit = null) => {
     // Default to status: "approved" for public listing unless custom status filter is requested
     const query = { ...filter };
@@ -128,8 +141,11 @@ const getAllAstrologers = async (filter = {}, page = null, limit = null) => {
         interviewMap[String(iv.astrologer)] = iv;
     }
 
+    const ordersMap = await completedOrdersFor(astroIds);
+
     return enriched.map(astro => ({
         ...astro,
+        completedOrders: ordersMap.get(String(astro._id)) || 0,
         interview: interviewMap[String(astro._id)] || null
     }));
 };
@@ -187,6 +203,56 @@ const getAstrologerById = async (id) => {
     const astroObj = astro.toObject();
     astroObj.interview = interview || null;
     return astroObj;
+};
+
+// Public numbers on an astrologer's profile: completed consultations and minutes, by type.
+// "free" is time the user paid for with bonus money; "paid" is the rest (real money).
+const STATS_TTL_MS = 60 * 1000;
+const statsCache = new Map();
+
+const getAstrologerStats = async (id) => {
+    const key = String(id);
+    const hit = statsCache.get(key);
+    if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.data;
+
+    const Session = require("../models/session.model");
+    const rules = require("./session/rules");
+    // The rates users are really billed, from the same rule the session engine uses
+    const astro = await Astrologer.findById(key).select("consultationFee").lean();
+    const rates = {
+        chat: rules.resolveRate(astro, "CHAT"),
+        audio: rules.resolveRate(astro, "AUDIO"),
+        video: rules.resolveRate(astro, "VIDEO")
+    };
+    const rows = await Session.aggregate([
+        { $match: { astrologer: new mongoose.Types.ObjectId(key), status: "COMPLETED", totalDurationSeconds: { $gt: 0 } } },
+        { $group: { _id: "$type", count: { $sum: 1 }, seconds: { $sum: "$totalDurationSeconds" }, freeSeconds: { $sum: { $ifNull: ["$promoSeconds", 0] } } } }
+    ]);
+
+    const by = { CHAT: { count: 0, seconds: 0 }, AUDIO: { count: 0, seconds: 0 }, VIDEO: { count: 0, seconds: 0 } };
+    let totalSeconds = 0;
+    let freeSeconds = 0;
+    let orders = 0;
+    for (const r of rows) {
+        if (!by[r._id]) continue;
+        by[r._id] = { count: r.count, seconds: r.seconds };
+        orders += r.count;
+        totalSeconds += r.seconds;
+        freeSeconds += Math.min(r.freeSeconds, r.seconds); // free time can never exceed the session itself
+    }
+
+    const data = {
+        rates,
+        orders,
+        chat: by.CHAT,
+        audio: by.AUDIO,
+        video: by.VIDEO,
+        totalSeconds,
+        freeSeconds,
+        paidSeconds: totalSeconds - freeSeconds
+    };
+    statsCache.set(key, { at: Date.now(), data });
+    return data;
 };
 
 const approveAstrologer = async (id) => {
@@ -316,6 +382,7 @@ module.exports = {
     getOnlineAstrologers,
     rebuildOnlineAstrologersCache,
     getAstrologerById,
+    getAstrologerStats,
     approveAstrologer,
     rejectAstrologer,
     toggleOnlineStatus,

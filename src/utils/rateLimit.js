@@ -7,8 +7,9 @@ const clientIp = (req) => {
     return req.ip || req.socket.remoteAddress || "unknown";
 };
 
-const rateLimit = ({ windowMs, max, keyPrefix, message }) => (req, res, next) => {
-    const key = `${keyPrefix}:${clientIp(req)}`;
+// keyFn(req) lets a route count per signed-in user instead of per IP (many phones share one carrier IP).
+const rateLimit = ({ windowMs, max, keyPrefix, message, keyFn }) => (req, res, next) => {
+    const key = `${keyPrefix}:${keyFn ? keyFn(req) : clientIp(req)}`;
     const now = Date.now();
     let entry = buckets.get(key);
     if (!entry || entry.resetAt <= now) {

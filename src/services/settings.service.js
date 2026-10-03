@@ -1,6 +1,6 @@
 const Setting = require("../models/setting.model");
 
-const DEFAULTS = { maintenanceMode: false, maintenanceMessage: "We are upgrading the app. Please try again shortly.", supportEmail: "", supportPhone: "", minWithdrawal: 100, promoPayoutPerMinute: 2.5 };
+const DEFAULTS = { maintenanceMode: false, maintenanceMessage: "We are upgrading the app. Please try again shortly.", supportEmail: "", supportPhone: "", termsUrl: "", privacyPolicyUrl: "", aboutText: "", minWithdrawal: 100, promoPayoutPerMinute: 2.5 };
 let cache = null;
 let cachedAt = 0;
 const TTL_MS = 15 * 1000;

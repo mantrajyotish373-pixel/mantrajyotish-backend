@@ -201,6 +201,13 @@ const AstroSchema = new mongoose.Schema(
             default: false
         },
 
+        // Denormalised count of users following this astrologer (kept in step by follow.service)
+        followersCount: {
+            type: Number,
+            default: 0,
+            min: 0
+        },
+
         isOnline: {
             type: Boolean,
             default: false

@@ -67,6 +67,17 @@ const updatePlatformSettings = async (req, res) => {
         if (p && !/^\+?[0-9 ()-]{7,20}$/.test(p)) return fail(res, 400, "Enter a valid support phone number");
         patch.supportPhone = p;
     }
+    for (const key of ["termsUrl", "privacyPolicyUrl"]) {
+        if (b[key] === undefined) continue;
+        const u = String(b[key]).trim();
+        if (u && !/^https:\/\/[^\s]+$/i.test(u)) return fail(res, 400, "Links must start with https://");
+        patch[key] = u;
+    }
+    if (b.aboutText !== undefined) {
+        const t = String(b.aboutText).trim();
+        if (t.length > 500) return fail(res, 400, "About text can be at most 500 characters");
+        patch.aboutText = t;
+    }
     if (b.minWithdrawal !== undefined) {
         const n = Number(b.minWithdrawal);
         if (!Number.isFinite(n) || n < 100 || n > 100000) return fail(res, 400, "Minimum withdrawal must be between ₹100 and ₹1,00,000");
@@ -89,7 +100,7 @@ const getPublicSettings = async (req, res) => {
     const s = await settingsService.getSettings();
     res.json({
         success: true,
-        data: { maintenanceMode: s.maintenanceMode, maintenanceMessage: s.maintenanceMessage, supportEmail: s.supportEmail, supportPhone: s.supportPhone, minWithdrawal: s.minWithdrawal }
+        data: { maintenanceMode: s.maintenanceMode, maintenanceMessage: s.maintenanceMessage, supportEmail: s.supportEmail, supportPhone: s.supportPhone, minWithdrawal: s.minWithdrawal, termsUrl: s.termsUrl, privacyPolicyUrl: s.privacyPolicyUrl, aboutText: s.aboutText }
     });
 };
 

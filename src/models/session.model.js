@@ -293,6 +293,8 @@ SessionSchema.index(
     { unique: true, partialFilterExpression: { liveLock: true }, name: "uniq_live_session_per_user" }
 );
 // Scheduler / recovery queries
+// Speeds up an astrologer's public stats (completed sessions by type)
+SessionSchema.index({ astrologer: 1, status: 1, type: 1 });
 SessionSchema.index({ status: 1, expiresAt: 1 });
 SessionSchema.index({ status: 1, connectDeadline: 1 });
 SessionSchema.index({ status: 1, maxEndAt: 1 });

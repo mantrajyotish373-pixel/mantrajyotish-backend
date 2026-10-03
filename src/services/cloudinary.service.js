@@ -150,7 +150,31 @@ const getDefaultProfilePic = (id, role, gender) => {
     return `https://res.cloudinary.com/${cloudName}/image/upload/f_auto,q_auto/v1/${prefix}_${index}`;
 };
 
+/**
+ * Strict upload of an already-converted WebP buffer (used for app banners).
+ * Unlike uploadBuffer it never falls back to a base64 data URL: the caller gets an error instead.
+ * Returns { url, publicId }.
+ */
+const uploadWebpStrict = async (buffer, folder) => {
+    if (!isCloudinaryConfigured()) throw new Error("Image storage (Cloudinary) is not configured on the server");
+    return new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+            { folder, resource_type: "image", format: "webp", overwrite: false },
+            (error, result) => (error ? reject(new Error(error.message || "Image upload failed")) : resolve({ url: result.secure_url, publicId: result.public_id }))
+        );
+        stream.end(buffer);
+    });
+};
+
+const deleteByPublicId = async (publicId) => {
+    if (!publicId || !isCloudinaryConfigured()) return;
+    try { await cloudinary.uploader.destroy(publicId, { resource_type: "image" }); }
+    catch (e) { console.error("Cloudinary delete error:", e.message || e); }
+};
+
 module.exports = {
+    uploadWebpStrict,
+    deleteByPublicId,
     isCloudinaryConfigured,
     uploadBase64OrUrl,
     uploadBuffer,
